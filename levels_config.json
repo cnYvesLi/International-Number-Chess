@@ -1,0 +1,74 @@
+{
+  "levels": [
+    {
+      "id": 1,
+      "name": "Basic Move",
+      "file": "move.json",
+      "title": "Level 1: Basic Movement",
+      "description": "Learn how to move pieces. Move allows a piece to move to any adjacent cell.",
+      "objective": "Move the red piece to any adjacent position",
+      "target_piece": {
+        "color": "red",
+        "number": 6
+      },
+      "win_condition": {
+        "type": "move_piece",
+        "piece": {"color": "red", "number": 6},
+        "from": [7, 11]
+      }
+    },
+    {
+      "id": 2,
+      "name": "Jump Escape",
+      "file": "jump.json",
+      "title": "Level 2: Jump Over Pieces",
+      "description": "Jump allows a piece to jump over any adjacent piece. Help the blue piece escape from the red pieces' encirclement.",
+      "objective": "Move the blue piece out of the red pieces' encirclement",
+      "target_piece": {
+        "color": "blue",
+        "number": 0
+      },
+      "win_condition": {
+        "type": "escape_encirclement",
+        "piece": {"color": "blue", "number": 0},
+        "escape_area": [[6, 6], [6, 7], [6, 8], [6, 9], [6, 10], [6, 11], [6, 12], [7, 6], [7, 8], [7, 10], [7, 12], [8, 6], [8, 7], [8, 9], [8, 11], [8, 12]]
+      }
+    },
+    {
+      "id": 3,
+      "name": "Span Calculation",
+      "file": "span.json",
+      "title": "Level 3: Span Calculation",
+      "description": "Use span calculation to move pieces. Move red piece 8 to the right of red piece 9.",
+      "objective": "Move piece 8, complete the calculation so the result equals 8",
+      "target_piece": {
+        "color": "red",
+        "number": 8
+      },
+      "win_condition": {
+        "type": "position_and_calculation",
+        "piece": {"color": "red", "number": 8},
+        "target_position": [10, 16],
+        "calculation_result": 8
+      }
+    },
+    {
+      "id": 4,
+      "name": "Continuous Span",
+      "file": "continous_span.json",
+      "title": "Level 4: Continuous Span Calculation",
+      "description": "Use continuous span calculation. Move red piece 1 to the right of blue piece 6.",
+      "objective": "Calculate so that both paths have the same value",
+      "target_piece": {
+        "color": "red",
+        "number": 1
+      },
+      "win_condition": {
+        "type": "position_and_equal_paths",
+        "piece": {"color": "red", "number": 1},
+        "target_position": [9, 17],
+        "equal_path_values": true
+      }
+    }
+  ]
+}

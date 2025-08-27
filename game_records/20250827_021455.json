@@ -1,0 +1,190 @@
+{
+  "game_info": {
+    "start_time": "2025-08-27T02:14:55.397915",
+    "end_time": "2025-08-27T02:16:48.014656",
+    "total_moves": 8,
+    "winner": null
+  },
+  "moves": [
+    {
+      "move_number": 1,
+      "player": "blue",
+      "piece_number": 2,
+      "start_position": {
+        "col": 11,
+        "row": 9
+      },
+      "end_position": {
+        "col": 10,
+        "row": 8
+      },
+      "move_type": "normal",
+      "timestamp": "2025-08-27T02:14:58.631794",
+      "paths": null
+    },
+    {
+      "move_number": 2,
+      "player": "red",
+      "piece_number": 2,
+      "start_position": {
+        "col": 3,
+        "row": 11
+      },
+      "end_position": {
+        "col": 4,
+        "row": 12
+      },
+      "move_type": "normal",
+      "timestamp": "2025-08-27T02:15:01.057468",
+      "paths": null
+    },
+    {
+      "move_number": 3,
+      "player": "blue",
+      "piece_number": 7,
+      "start_position": {
+        "col": 12,
+        "row": 12
+      },
+      "end_position": {
+        "col": 10,
+        "row": 10
+      },
+      "move_type": "normal",
+      "timestamp": "2025-08-27T02:15:02.164018",
+      "paths": null
+    },
+    {
+      "move_number": 4,
+      "player": "red",
+      "piece_number": 6,
+      "start_position": {
+        "col": 2,
+        "row": 10
+      },
+      "end_position": {
+        "col": 4,
+        "row": 8
+      },
+      "move_type": "normal",
+      "timestamp": "2025-08-27T02:15:05.357324",
+      "paths": null
+    },
+    {
+      "move_number": 5,
+      "player": "blue",
+      "piece_number": 0,
+      "start_position": {
+        "col": 14,
+        "row": 10
+      },
+      "end_position": {
+        "col": 10,
+        "row": 6
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-08-27T02:15:23.278507",
+      "paths": [
+        [
+          -114514,
+          8,
+          1
+        ],
+        [
+          -1,
+          7,
+          2
+        ]
+      ],
+      "formula": [
+        "8+1",
+        "7+2"
+      ]
+    },
+    {
+      "move_number": 6,
+      "player": "red",
+      "piece_number": 9,
+      "start_position": {
+        "col": 1,
+        "row": 11
+      },
+      "end_position": {
+        "col": 5,
+        "row": 7
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-08-27T02:15:35.712172",
+      "paths": [
+        6,
+        3
+      ],
+      "formula": [
+        "6+3"
+      ]
+    },
+    {
+      "move_number": 7,
+      "player": "blue",
+      "piece_number": 9,
+      "start_position": {
+        "col": 13,
+        "row": 9
+      },
+      "end_position": {
+        "col": 4,
+        "row": 6
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-08-27T02:16:13.893043",
+      "paths": [
+        [
+          -114514,
+          6,
+          3
+        ],
+        [
+          -1,
+          9
+        ]
+      ],
+      "formula": [
+        "6+3",
+        "9"
+      ]
+    },
+    {
+      "move_number": 8,
+      "player": "red",
+      "piece_number": 0,
+      "start_position": {
+        "col": 0,
+        "row": 10
+      },
+      "end_position": {
+        "col": 12,
+        "row": 12
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-08-27T02:16:44.639728",
+      "paths": [
+        [
+          -114514,
+          7,
+          3
+        ],
+        [
+          -1,
+          9,
+          1,
+          7,
+          8
+        ]
+      ],
+      "formula": [
+        "7+3",
+        "9+((1+7)÷8)"
+      ]
+    }
+  ]
+}
