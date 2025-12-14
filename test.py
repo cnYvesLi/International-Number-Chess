@@ -1,4 +1,5 @@
 import dis
+from typing import Any
 import pygame
 import sys
 import math
@@ -6,6 +7,10 @@ import json
 import datetime
 import os
 import time
+from services import custom_setup
+from services import practice as practice_service
+from services import game as game_service
+from services import netplay as netplay
 pygame.init()
 
 # 修改窗口大小以适应计算版区域和上方算式区域
@@ -22,6 +27,7 @@ selected_custom_file = None  # 选中的自定义棋谱文件
 
 # Replay功能相关变量
 replay_files = []     # 可用的回放文件列表
+replay_page = 0       # 当前回放列表页码
 selected_replay_file = None  # 选中的回放文件
 replay_data = None    # 回放数据
 replay_step = 0       # 当前回放步数
@@ -35,10 +41,20 @@ replay_current_move = None # 当前移动信息
 replay_path_points = [] # 当前移动路径上的点
 replay_intermediate_points = []  # 记录连跳时的中间点（新起点）
 
+# 试下功能相关变量
+try_mode = False      # 是否处于试下模式
+try_move_stack = []   # 试下移动栈，记录每步移动 []{"piece": (color, num), "from": (col, row), "to": (col, row)}]
+try_original_blue = {} # 试下前的蓝色棋子位置备份
+try_original_red = {}  # 试下前的红色棋子位置备份
+try_current_player = 'blue'  # 试下模式下的当前玩家
+try_step = 0        # 试下模式下的当前步数
+try_current_index = 0  # 试下模式下当前查看的步数索引
+
 # 自定义棋谱名称相关变量
 custom_names = {}  # 存储自定义棋谱名称
 renaming_file = None  # 当前正在重命名的文件
 rename_input = ""  # 重命名输入文本
+deleting_file = None # 当前正在确认删除的文件
 
 # 自定义摆棋相关变量
 custom_setup_pieces = {}  # 存储自定义摆棋位置 {(col, row): (color, num)}
@@ -70,6 +86,7 @@ pygame.display.set_caption('国际数棋棋盘')
 
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
+GREEN = (0, 255, 0)
 RED = (255, 0, 0)
 BLUE = (0, 100, 255)
 YELLOW = (255, 215, 0)
@@ -111,6 +128,11 @@ calculation_result = None  # 计算结果
 operation = None  # 当前选择的运算符
 formula_text = ""  # 新增：存储算式文本
 hovered_button = None  # 新增：当前鼠标悬停的按钮
+
+# 局域网联机相关变量
+net_session = None  # 当前网络会话对象（NetSession）
+local_side = None   # 本地执子颜色 'blue' 或 'red'
+processing_remote_move = False  # 标记当前是否在应用对方走子，避免回传循环
 
 # 六个方向的向量（60度间隔）
 DIRECTIONS = [(GRID, 0), (-GRID, 0),
@@ -220,213 +242,111 @@ selected_gray_point = None  # 选中的灰色点
 color_locked = False   # 颜色锁定状态，锁定后不切换玩家颜色
 continuous_span_line = -1
 
+def set_default_positions():
+    global BLUE_PIECES, RED_PIECES, current_player
+    BLUE_PIECES = {
+        0: [14, 10],
+        1: [11, 13],
+        2: [11, 9],
+        3: [11, 11],
+        4: [11, 7],
+        5: [12, 8],
+        6: [12, 10],
+        7: [12, 12],
+        8: [13, 11],
+        9: [13, 9]
+    }
+    RED_PIECES = {
+        0: [0, 10],
+        1: [3, 7],
+        2: [3, 11],
+        3: [3, 9],
+        4: [3, 13],
+        5: [2, 12],
+        6: [2, 10],
+        7: [2, 8],
+        8: [1, 9],
+        9: [1, 11]
+    }
+    current_player = 'blue'
+
 # 记谱功能相关变量
 game_record = []  # 存储游戏记录
 game_start_time = None  # 游戏开始时间
 move_count = 0  # 移动计数
 def load_levels_config():
-    """加载关卡配置"""
+    """加载关卡配置（委托到services.practice）"""
     global levels_config
-    try:
-        with open('levels_config.json', 'r', encoding='utf-8') as f:
-            levels_config = json.load(f)
+    cfg = practice_service.load_levels_config()
+    if cfg is not None:
+        levels_config = cfg
         return True
-    except Exception as e:
-        print(f"Error loading levels config: {e}")
-        return False
+    return False
+
 
 def load_practice_progress():
-    """加载练习进度"""
+    """加载练习进度（委托到services.practice）"""
     global practice_progress
-    try:
-        with open('practice_progress.json', 'r', encoding='utf-8') as f:
-            practice_progress = json.load(f)
-        return True
-    except Exception as e:
-        print(f"Error loading practice progress: {e}")
-        # 创建默认进度文件
-        practice_progress = {
-            "player_progress": {
-                "completed_levels": [],
-                "current_level": 1,
-                "total_levels": 4,
-                "last_played": None
-            },
-            "level_records": {
-                str(i): {
-                    "completed": False,
-                    "attempts": 0,
-                    "best_moves": None,
-                    "completion_time": None
-                } for i in range(1, 5)
-            }
-        }
-        save_practice_progress()
-        return True
+    practice_progress = practice_service.load_practice_progress()
+    return True
+
 
 def save_practice_progress():
-    """保存练习进度"""
-    try:
-        with open('practice_progress.json', 'w', encoding='utf-8') as f:
-            json.dump(practice_progress, f, indent=2, ensure_ascii=False)
-        return True
-    except Exception as e:
-        print(f"Error saving practice progress: {e}")
-        return False
+    """保存练习进度（委托到services.practice）"""
+    return practice_service.save_practice_progress(practice_progress)
+
 
 def reset_practice_progress():
-    """重置练习进度"""
+    """重置练习进度（委托到services.practice）"""
     global practice_progress
-    practice_progress = {
-        "player_progress": {
-            "completed_levels": [],
-            "current_level": 1,
-            "total_levels": 4,
-            "last_played": None
-        },
-        "level_records": {
-            str(i): {
-                "completed": False,
-                "attempts": 0,
-                "best_moves": None,
-                "completion_time": None
-            } for i in range(1, 5)
-        }
-    }
-    save_practice_progress()
-    print("Practice progress has been reset!")
+    practice_progress = practice_service.reset_practice_progress()
+
 
 def start_level(level_id):
-    """开始指定关卡"""
-    global current_level, level_start_time, level_move_count, allowed_piece
-    
-    if not levels_config or level_id > len(levels_config['levels']):
-        return False
-    
-    level_info = levels_config['levels'][level_id - 1]
-    
-    # 加载关卡文件
-    if load_custom_setup_file(level_info['file']):
-        current_level = level_id
-        level_start_time = time.time()
-        level_move_count = 0
-        
-        # 设置允许移动的棋子
-        target_piece = level_info['target_piece']
-        allowed_piece = (target_piece['color'], target_piece['number'])
-        
-        # 更新尝试次数
-        practice_progress['level_records'][str(level_id)]['attempts'] += 1
-        save_practice_progress()
-        
+    """开始指定关卡（委托到services.practice）"""
+    global current_level, level_start_time, level_move_count, allowed_piece, BLUE_PIECES, RED_PIECES, practice_progress
+    success, blue_p, red_p, allowed, prog, start_t, move_cnt, cur_lvl = practice_service.start_level(
+        level_id, levels_config, practice_progress
+    )
+    if success:
+        BLUE_PIECES = blue_p
+        RED_PIECES = red_p
+        allowed_piece = allowed
+        practice_progress = prog
+        level_start_time = start_t
+        level_move_count = move_cnt
+        current_level = cur_lvl
         return True
     return False
+
 
 def check_level_victory():
-    """检查关卡胜利条件"""
-    global current_level, level_start_time, level_move_count
-    
-    if not levels_config or current_level > len(levels_config['levels']):
-        return False
-    
-    level_info = levels_config['levels'][current_level - 1]
-    win_condition = level_info['win_condition']
-    
-    if win_condition['type'] == 'move_piece':
-        # 检查棋子是否移动了
-        piece_info = win_condition['piece']
-        original_pos = win_condition['from']
-        
-        pieces = BLUE_PIECES if piece_info['color'] == 'blue' else RED_PIECES
-        current_pos = pieces.get(piece_info['number'])
-        
-        return current_pos != original_pos
-    
-    elif win_condition['type'] == 'escape_encirclement':
-        # 检查棋子是否逃出包围
-        piece_info = win_condition['piece']
-        pieces = BLUE_PIECES if piece_info['color'] == 'blue' else RED_PIECES
-        current_pos = pieces.get(piece_info['number'])
-        
-        # 检查是否在包围区域外
-        escape_area = win_condition['escape_area']
-        return current_pos not in escape_area
-    
-    elif win_condition['type'] == 'position_and_calculation':
-        # 检查位置和计算结果
-        piece_info = win_condition['piece']
-        target_pos = win_condition['target_position']
-        target_result = win_condition['calculation_result']
-        
-        pieces = BLUE_PIECES if piece_info['color'] == 'blue' else RED_PIECES
-        current_pos = pieces.get(piece_info['number'])
-        
-        # 检查位置
-        if current_pos != target_pos:
-            return False
-            
-        # 对于单跨操作，检查最后一步移动是否满足计算要求
-        if calculation_result is not None:
-            # 使用计算版的结果
-            return calculation_result == target_result
-        else:
-            # 对于单跨操作，检查最后一步移动的跨越数字总和
-            if game_record and len(game_record) > 0:
-                last_move = game_record[-1]
-                if (last_move['player'] == piece_info['color'] and 
-                    last_move['piece_number'] == piece_info['number']):
-                    # 计算跨越的数字总和
-                    start_pos = (last_move['start_position']['col'], last_move['start_position']['row'])
-                    end_pos = (last_move['end_position']['col'], last_move['end_position']['row'])
-                    crossed_numbers = get_numbers(start_pos, end_pos, point_map)
-                    return sum(crossed_numbers) == target_result
-            return False
-    
-    elif win_condition['type'] == 'position_and_equal_paths':
-        # 检查位置和路径值相等
-        piece_info = win_condition['piece']
-        target_pos = win_condition['target_position']
-        
-        pieces = BLUE_PIECES if piece_info['color'] == 'blue' else RED_PIECES
-        current_pos = pieces.get(piece_info['number'])
-        
-        # 这里需要检查连跨计算的两条路径值是否相等
-        # 具体实现需要根据游戏逻辑调整
-        return current_pos == target_pos
-    
-    return False
+    """检查关卡胜利条件（委托到services.practice）"""
+    pm = globals().get('point_map')
+    return practice_service.check_level_victory(
+        current_level,
+        levels_config,
+        BLUE_PIECES,
+        RED_PIECES,
+        calculation_result,
+        game_record,
+        pm,
+        get_numbers,
+    )
+
 
 def complete_level():
-    """完成关卡"""
-    global current_level, level_start_time, level_move_count, state
-    
-    if current_level and level_start_time:
-        completion_time = time.time() - level_start_time
-        
-        # 更新进度记录
-        level_record = practice_progress['level_records'][str(current_level)]
-        level_record['completed'] = True
-        level_record['completion_time'] = completion_time
-        
-        if level_record['best_moves'] is None or level_move_count < level_record['best_moves']:
-            level_record['best_moves'] = level_move_count
-        
-        # 更新完成关卡列表
-        if current_level not in practice_progress['player_progress']['completed_levels']:
-            practice_progress['player_progress']['completed_levels'].append(current_level)
-        
-        # 解锁下一关
-        if current_level < practice_progress['player_progress']['total_levels']:
-            practice_progress['player_progress']['current_level'] = current_level + 1
-        
-        practice_progress['player_progress']['last_played'] = time.strftime('%Y-%m-%d %H:%M:%S')
-        save_practice_progress()
-        
-        # 切换到关卡完成状态
-        state = "LEVEL_COMPLETE"
-        
+    """完成关卡（委托到services.practice）"""
+    global practice_progress, state
+    success, prog, new_state = practice_service.complete_level(
+        current_level, level_start_time, level_move_count, practice_progress
+    )
+    if success:
+        practice_progress = prog
+        state = new_state
         return True
     return False
+
 
 def can_move_piece(piece_color, piece_number):
     """检查是否可以移动指定棋子"""
@@ -435,81 +355,9 @@ def can_move_piece(piece_color, piece_number):
     
     return (piece_color, piece_number) == allowed_piece
 
-def load_custom_setup_files():
-    """加载自定义棋谱文件列表"""
-    custom_files = []
-    if os.path.exists('custom_setups'):
-        for filename in os.listdir('custom_setups'):
-            if filename.endswith('.json') and filename.startswith('custom_setup_'):
-                custom_files.append(filename)
-    return sorted(custom_files, reverse=True)  # 按时间倒序排列
 
-def get_custom_setup_info(filename):
-    """获取自定义棋谱的信息"""
-    try:
-        with open(os.path.join('custom_setups', filename), 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            setup_info = data.get('setup_info', {})
-            blue_count = setup_info.get('blue_pieces_count', 0)
-            red_count = setup_info.get('red_pieces_count', 0)
-            created_time = setup_info.get('created_time', '')
-            
-            # 解析时间格式
-            if created_time:
-                try:
-                    dt = datetime.datetime.fromisoformat(created_time)
-                    date_str = f"{dt.year % 100}-{dt.month}-{dt.day}"
-                except:
-                    date_str = "Unknown"
-            else:
-                date_str = "Unknown"
-            
-            return f"B:{blue_count} R:{red_count}", date_str
-    except:
-        return "Unknown", "Unknown"
+# 已迁移到 services/custom_setup.py
 
-def load_custom_setup_file(filename):
-    """加载指定的自定义棋谱文件"""
-    global BLUE_PIECES, RED_PIECES
-    try:
-        with open(os.path.join('custom_setups', filename), 'r', encoding='utf-8') as f:
-            setup_data = json.load(f)
-        
-        # 清空所有棋子位置
-        BLUE_PIECES = {}
-        RED_PIECES = {}
-        
-        # 只加载文件中记录的棋子
-        blue_pieces = setup_data.get('blue_pieces', {})
-        red_pieces = setup_data.get('red_pieces', {})
-        
-        for piece_num, pos in blue_pieces.items():
-            BLUE_PIECES[int(piece_num)] = pos
-        
-        for piece_num, pos in red_pieces.items():
-            RED_PIECES[int(piece_num)] = pos
-        
-        return True
-    except Exception as e:
-        print(f"Error loading custom setup file: {e}")
-        return False
-
-def load_custom_names():
-    """加载自定义棋谱名称"""
-    global custom_names
-    try:
-        with open('game_records/custom_names.json', 'r', encoding='utf-8') as f:
-            custom_names = json.load(f)
-    except:
-        custom_names = {}
-
-def save_custom_names():
-    """保存自定义棋谱名称"""
-    try:
-        with open('game_records/custom_names.json', 'w', encoding='utf-8') as f:
-            json.dump(custom_names, f, indent=2, ensure_ascii=False)
-    except:
-        pass
 
 def get_display_name(filename, index):
     """获取棋谱的显示名称"""
@@ -518,135 +366,45 @@ def get_display_name(filename, index):
     else:
         return f"Record{index + 1}"
 
+
 def get_game_info(filename):
-    """获取棋谱的步数和时间信息"""
-    try:
-        with open(os.path.join('game_records', filename), 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            game_info = data.get('game_info', {})
-            total_moves = game_info.get('total_moves', 0)
-            start_time = game_info.get('start_time', '')
-            
-            # 解析时间格式 "2025-08-27T00:18:19.317054" -> "25-8-27"
-            if start_time:
-                try:
-                    dt = datetime.datetime.fromisoformat(start_time)
-                    date_str = f"{dt.year % 100}-{dt.month}-{dt.day}"
-                except:
-                    date_str = "Unknown"
-            else:
-                date_str = "Unknown"
-            
-            return total_moves, date_str
-    except:
-        return 0, "Unknown"
+    """获取棋谱的步数和时间信息（委托到services.game）"""
+    return game_service.get_game_info(filename)
+
 
 def save_custom_setup():
-    """保存自定义棋谱设置"""
-    if not custom_setup_pieces:
-        return  # 没有棋子则不保存
-    
-    # 创建保存目录
-    if not os.path.exists('custom_setups'):
-        os.makedirs('custom_setups')
-    
-    # 生成文件名
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"custom_setup_{timestamp}.json"
-    
-    # 转换为标准格式
-    blue_pieces = {}
-    red_pieces = {}
-    
-    for pos, (color, num) in custom_setup_pieces.items():
-        if color == 'blue':
-            blue_pieces[num] = list(pos)
-        else:
-            red_pieces[num] = list(pos)
-    
-    # 创建保存数据
-    setup_data = {
-        "setup_info": {
-            "created_time": datetime.datetime.now().isoformat(),
-            "type": "custom_setup",
-            "blue_pieces_count": len(blue_pieces),
-            "red_pieces_count": len(red_pieces)
-        },
-        "blue_pieces": blue_pieces,
-        "red_pieces": red_pieces
-    }
-    
-    # 保存到文件
-    try:
-        with open(f'custom_setups/{filename}', 'w', encoding='utf-8') as f:
-            json.dump(setup_data, f, indent=2, ensure_ascii=False)
-        print(f"Custom setup saved as {filename}")
-    except Exception as e:
-        print(f"Failed to save custom setup: {e}")
+    """保存自定义棋谱设置（委托到services.custom_setup）"""
+    return custom_setup.save_custom_setup(custom_setup_pieces)
+
 
 def init_game_record():
-    """初始化游戏记录"""
+    """初始化游戏记录（委托到services.game）"""
     global game_record, game_start_time, move_count
-    
-    # 在practice模式下不初始化游戏记录
-    if game_mode == 'practice':
-        game_record = []
-        game_start_time = None
-        move_count = 0
-        return
-    
-    game_record = []
-    game_start_time = datetime.datetime.now()
-    move_count = 0
-    
-    # 创建记谱文件夹
-    if not os.path.exists('game_records'):
-        os.makedirs('game_records')
+    game_record, game_start_time, move_count = game_service.init_game_record(game_mode)
+
 
 def record_move(piece_info, start_pos, target_pos, move_type, formula=None, res=None):
-    """记录一步棋"""
-    global game_record, move_count
-    
-    # 在practice模式下不记录棋谱
-    if game_mode == 'practice':
-        return
-    
-    # 只在非锁定颜色和非上帝模式时记录
-    if color_locked or god_mode:
-        return
-    
-    move_count += 1
-    color, piece_num, _, _ = piece_info
-    
-    move_record = {
-        "move_number": move_count,
-        "player": color,
-        "piece_number": piece_num,
-        "start_position": {
-            "col": start_pos[0],
-            "row": start_pos[1]
-        },
-        "end_position": {
-            "col": target_pos[0],
-            "row": target_pos[1]
-        },
-        "move_type": move_type,
-        "timestamp": datetime.datetime.now().isoformat(),
-        "paths": res
-    }
-    
-    # 如果有算式，添加到记录中
-    if formula:
-        move_record["formula"] = formula
-    
-    game_record.append(move_record)
+    """记录一步棋（委托到services.game）"""
+    global game_record, move_count, try_mode, try_current_index, try_step
+    game_record, move_count = game_service.record_move(
+        piece_info, start_pos, target_pos, move_type, formula, res,
+        game_mode=game_mode,
+        color_locked=color_locked,
+        god_mode=god_mode,
+        try_mode=try_mode,
+        try_current_index=try_current_index,
+        try_step=try_step,
+        game_record=game_record,
+        move_count=move_count,
+    )
+
 
 def save_game_record():
     """保存游戏记录到文件"""
     global game_record, game_start_time
     
-    # 在practice模式下不保存棋谱
-    if game_mode == 'practice':
+    # 仅在正式对局模式下保存，试下模式或回放模式下不保存
+    if game_mode != 'play' or try_mode:
         return
     
     if not game_record or not game_start_time:
@@ -693,9 +451,11 @@ def load_replay_file(filename):
         print(f"Error loading replay file: {e}")
         return False
 
+
 def update_replay_positions():
-    """根据当前回放步数更新棋子位置"""
+    """根据当前回放步数更新棋子位置，并在非试下模式下同步到正常棋子集合和selected_piece"""
     global replay_pieces_blue, replay_pieces_red, replay_current_move, replay_path_points, replay_intermediate_points
+    global BLUE_PIECES, RED_PIECES, game_mode, try_mode, selected_piece
     
     if not replay_data or replay_step < 0:
         return
@@ -867,82 +627,122 @@ def update_replay_positions():
         replay_path_points = []
         replay_intermediate_points = []
 
-def draw_replay_controls():
-    """绘制回放控制面板"""
-    global replay_step, replay_playing, replay_speed
+    # 在回放模式且不处于试下模式时，同步 selected_piece 为当前步的终点棋子，或在没有步数时清空
+    if game_mode == 'replay' and not try_mode:
+        if replay_current_move:
+            piece_color = replay_current_move['player']
+            piece_num = replay_current_move['piece_number']
+            end_col = replay_current_move['end_position']['col']
+            end_row = replay_current_move['end_position']['row']
+            x = BEGIN_X + end_row * GRID * 0.5
+            y = BEGIN_Y + end_col * GRID * math.sqrt(3) / 2
+            selected_piece = (piece_color, piece_num, (end_col, end_row), (x, y))
+
+    # 在回放模式且不处于试下模式时，将回放棋子位置同步到正常棋子集合，确保draw_board统一逻辑显示正确位置
+    if game_mode == 'replay' and not try_mode:
+        BLUE_PIECES = {k: v.copy() for k, v in replay_pieces_blue.items()}
+        RED_PIECES = {k: v.copy() for k, v in replay_pieces_red.items()}
+
+
+def enter_try_mode():
+    """进入试下模式"""
+    global try_mode, try_move_stack, try_original_blue, try_original_red, try_current_player, try_step, try_current_index, current_player, selected_piece, valid_moves, board_locked, BLUE_PIECES, RED_PIECES, formula_text, try_record_start_index, game_record
     
-    # 控制面板背景
-    control_panel_rect = pygame.Rect(CALC_AREA_X, CALC_AREA_Y + CALC_AREA_HEIGHT - 150, CALC_AREA_WIDTH, 150)
-    pygame.draw.rect(window, LIGHT_GRAY, control_panel_rect)
-    pygame.draw.rect(window, BLACK, control_panel_rect, 2)
+    # 只有在回放模式且不在试下模式时才能进入
+    if game_mode != 'replay' or try_mode:
+        return
     
-    font = pygame.font.Font(None, 24)
+    board_locked = False
+    try_mode = True
+    try_move_stack = []
+    try_step = 0
+    try_current_index = 0
+    formula_text = "" 
+    # 记录开启试下时的记谱起始位置，便于撤回时同步
+    try_record_start_index = len(game_record)
     
-    # 步数显示
-    step_text = font.render(f"Step: {replay_step}/{replay_max_steps}", True, BLACK)
-    window.blit(step_text, (CALC_AREA_X + 10, CALC_AREA_Y + CALC_AREA_HEIGHT - 140))
+    # 备份当前棋子位置（以回放当前局面为起点）
+    try_original_blue = {k: v.copy() for k, v in replay_pieces_blue.items()}
+    try_original_red = {k: v.copy() for k, v in replay_pieces_red.items()}
+
+    # 将当前局面同步到正常棋子集合，统一绘制与选择逻辑
+    BLUE_PIECES = {k: v.copy() for k, v in replay_pieces_blue.items()}
+    RED_PIECES = {k: v.copy() for k, v in replay_pieces_red.items()}
+
+    # 进入试下后取消当前选中并清空可走点
+    selected_piece = None
+    valid_moves = []
+
+    # 设置当前玩家
+    # 根据回放的最后一步决定下一个玩家
+    if replay_step > 0 and replay_step <= len(replay_data.get('moves', [])):
+        last_move = replay_data['moves'][replay_step - 1]
+        try_current_player = 'red' if last_move['player'] == 'blue' else 'blue'
+    else:
+        try_current_player = 'blue'  # 默认蓝方先行
+    # 同步正常逻辑的当前玩家，确保后续沿用同一套移动逻辑
+    current_player = try_current_player
+
+
+def exit_try_mode():
+    """退出试下模式，恢复到原始状态"""
+    global try_mode, try_move_stack, replay_pieces_blue, replay_pieces_red, try_current_player
+    global try_original_blue, try_original_red, selected_piece, valid_moves, BLUE_PIECES, RED_PIECES
     
-    # 进度条
-    progress_rect = pygame.Rect(CALC_AREA_X + 10, CALC_AREA_Y + CALC_AREA_HEIGHT - 110, CALC_AREA_WIDTH - 20, 20)
-    pygame.draw.rect(window, WHITE, progress_rect)
-    pygame.draw.rect(window, BLACK, progress_rect, 2)
+    if not try_mode:
+        return
     
-    if replay_max_steps > 0:
-        progress_width = int((replay_step / replay_max_steps) * (CALC_AREA_WIDTH - 24))
-        progress_fill_rect = pygame.Rect(CALC_AREA_X + 12, CALC_AREA_Y + CALC_AREA_HEIGHT - 108, progress_width, 16)
-        pygame.draw.rect(window, BLUE, progress_fill_rect)
+    try_mode = False
+    try_move_stack = []
     
-    # 控制按钮
-    button_y = CALC_AREA_Y + CALC_AREA_HEIGHT - 80
-    button_width = 35
-    button_height = 25
-    button_spacing = 40
+    # 恢复原始棋子位置
+    replay_pieces_blue = {k: v.copy() for k, v in try_original_blue.items()}
+    replay_pieces_red = {k: v.copy() for k, v in try_original_red.items()}
+    # 同步到正常棋子集合，恢复到开启试下之前的显示与交互状态
+    BLUE_PIECES = {k: v.copy() for k, v in replay_pieces_blue.items()}
+    RED_PIECES = {k: v.copy() for k, v in replay_pieces_red.items()}
     
-    # 上一步按钮
-    prev_button = pygame.Rect(CALC_AREA_X + 10, button_y, button_width, button_height)
-    pygame.draw.rect(window, WHITE, prev_button)
-    pygame.draw.rect(window, BLACK, prev_button, 2)
-    prev_text = font.render("<<", True, BLACK)
-    prev_text_rect = prev_text.get_rect(center=prev_button.center)
-    window.blit(prev_text, prev_text_rect)
+    # 重置试下相关变量
+    try_current_player = 'blue'  # 默认蓝方先行
     
-    # 播放/暂停按钮
-    play_button = pygame.Rect(CALC_AREA_X + 10 + button_spacing, button_y, button_width, button_height)
-    pygame.draw.rect(window, WHITE, play_button)
-    pygame.draw.rect(window, BLACK, play_button, 2)
-    play_text = font.render("||" if replay_playing else ">", True, BLACK)
-    play_text_rect = play_text.get_rect(center=play_button.center)
-    window.blit(play_text, play_text_rect)
+    # 清除选中状态
+    selected_piece = None
+    valid_moves = []
+
+
+def undo_try_move():
+    """撤销试下模式中的最后一步移动"""
+    global try_mode, try_move_stack, BLUE_PIECES, RED_PIECES, try_current_player, try_step, try_current_index, current_player, game_record, move_count, try_record_start_index
     
-    # 下一步按钮
-    next_button = pygame.Rect(CALC_AREA_X + 10 + button_spacing * 2, button_y, button_width, button_height)
-    pygame.draw.rect(window, WHITE, next_button)
-    pygame.draw.rect(window, BLACK, next_button, 2)
-    next_text = font.render(">>", True, BLACK)
-    next_text_rect = next_text.get_rect(center=next_button.center)
-    window.blit(next_text, next_text_rect)
+    if not try_mode or not try_move_stack or try_current_index <= 0:
+        return
     
-    # 重置按钮
-    reset_button = pygame.Rect(CALC_AREA_X + 10 + button_spacing * 3, button_y, button_width, button_height)
-    pygame.draw.rect(window, WHITE, reset_button)
-    pygame.draw.rect(window, BLACK, reset_button, 2)
-    reset_text = font.render("R", True, BLACK)
-    reset_text_rect = reset_text.get_rect(center=reset_button.center)
-    window.blit(reset_text, reset_text_rect)
+    # 更新当前索引
+    try_current_index -= 1
     
-    # 速度控制
-    speed_text = font.render(f"Speed: {replay_speed:.1f}x", True, BLACK)
-    window.blit(speed_text, (CALC_AREA_X + 10, button_y + 30))
+    # 获取要撤销的移动
+    move_to_undo = try_move_stack[try_current_index]
     
-    # 返回按钮区域信息
-    return {
-        'prev_button': prev_button,
-        'play_button': play_button,
-        'next_button': next_button,
-        'reset_button': reset_button,
-        'progress_rect': progress_rect
-    }
-        
+    # 恢复棋子位置
+    piece_color = move_to_undo["piece"][0]
+    piece_num = move_to_undo["piece"][1]
+    from_pos = move_to_undo["from"]
+    
+    if piece_color == 'blue':
+        BLUE_PIECES[piece_num] = list(from_pos)
+    else:
+        RED_PIECES[piece_num] = list(from_pos)
+    
+    # 切换当前玩家（与正常逻辑保持一致）
+    try_current_player = piece_color
+    current_player = piece_color
+
+    # 同步删除最后一条记录（仅在试下期间新增的记录范围内）
+    if len(game_record) > try_record_start_index:
+        # 删除最后一条并回退步数计数
+        game_record.pop()
+        if move_count > 0:
+            move_count -= 1
 
 def get_line_coordinates(col, row, point_map):
     """
@@ -992,6 +792,7 @@ def get_line_coordinates(col, row, point_map):
     left_diagonal.sort(key=lambda x: (x[0], x[1]))   # 按列再按行排序
     
     return left_diagonal, right_diagonal, horizontal_line
+
 
 def check_win():
     red_wins = True
@@ -1443,6 +1244,42 @@ def not_in_pieces(x, y, pieces):
             return False
     return True
 
+# 添加前进一步函数
+def forward_try_move():
+    """在试下模式中前进一步"""
+    global try_mode, try_move_stack, BLUE_PIECES, RED_PIECES, try_current_player, try_current_index, current_player
+
+    # 必须在试下模式，且存在可前进的步
+    if not try_mode:
+        return
+    if try_current_index >= len(try_move_stack):
+        return
+
+    move_to_apply = try_move_stack[try_current_index]
+
+    piece_color = move_to_apply["piece"][0]
+    piece_num = move_to_apply["piece"][1]
+    to_pos = move_to_apply["to"]
+
+    # 应用移动到棋盘
+    if piece_color == 'blue':
+        BLUE_PIECES[piece_num] = list(to_pos)
+    else:
+        RED_PIECES[piece_num] = list(to_pos)
+
+    # 更新索引与当前玩家（与正常走子逻辑保持一致）
+    try_current_index += 1
+    try_current_player = 'red' if piece_color == 'blue' else 'blue'
+    current_player = try_current_player
+
+
+def get_level_button_at_pos(pos):
+    """获取点击位置对应的关卡ID"""
+    for button_name, rect in draw_menu.button_rects.items():
+        if rect.collidepoint(pos) and button_name.startswith("level_"):
+            return int(button_name.split("_")[1])
+    return None
+
 
 def not_in_pieces_board_coords(col, row, pieces_list):
     """检查棋盘坐标是否不在pieces_list中（支持混合格式）"""
@@ -1473,8 +1310,12 @@ def get_potential_jump_recursion(point_map, blue_pieces, red_pieces, all_points,
 
 
 def get_paths(start, end, point_map, blue_pieces, red_pieces, all_points, current_jumps=None, path=None):
+    """返回所有可行路径的数组，不修改全局变量"""
     if current_jumps is None:
         current_jumps = []
+    if path is None:
+        path = []
+    res_paths = []
     start_col, start_row = start[0], start[1]
     end_col, end_row = end[0], end[1]
     first_check = True
@@ -1484,11 +1325,11 @@ def get_paths(start, end, point_map, blue_pieces, red_pieces, all_points, curren
             for node in path:
                 if len(node) == 1:
                     if res_num == -1:
-                       res_num = node[0]
+                        res_num = node[0]
                     elif res_num != node[0]:
-                        return
-        paths.append(path)
-        return
+                        return []
+        res_paths.append(path)
+        return res_paths
 
     new_pos = get_potential_jump_positions((start[0], start[1]), point_map, blue_pieces, red_pieces, all_points, 0)
     current_jumps.append((start_col, start_row))
@@ -1500,8 +1341,11 @@ def get_paths(start, end, point_map, blue_pieces, red_pieces, all_points, curren
             for node in path:
                 res.append(node)
             res.append(get_numbers((start_col, start_row), (next_col, next_row), point_map))
-            get_paths((next_col, next_row, direction), end, point_map, blue_pieces, red_pieces, all_points, current_jumps, res)
+            child_paths = get_paths((next_col, next_row, direction), end, point_map, blue_pieces, red_pieces, all_points, current_jumps, res)
+            if child_paths:
+                res_paths.extend(child_paths)
     current_jumps.pop()
+    return res_paths
 
 
 def get_valid_moves(piece_pos, point_map, blue_pieces, red_pieces, all_points):
@@ -1556,7 +1400,8 @@ def get_valid_moves(piece_pos, point_map, blue_pieces, red_pieces, all_points):
 
 def move_piece(piece_info, target_pos, blue_pieces, red_pieces, move_type="normal", formula=None, res=None):
     """移动棋子到目标位置"""
-    global current_player, color_locked, level_move_count
+    global current_player, color_locked, level_move_count, try_mode, try_move_stack, try_step, try_current_index, try_current_player
+    global net_session, local_side, processing_remote_move
     color, num, start_pos, _ = piece_info
     
     # 在练习模式下检查是否允许移动该棋子
@@ -1582,9 +1427,43 @@ def move_piece(piece_info, target_pos, blue_pieces, red_pieces, move_type="norma
     # 在练习模式下增加移动计数
     if game_mode == 'practice':
         level_move_count += 1
-    
-    # 记录这步棋
+
+    # 若处于试下模式，并且用户从中间步继续走子，先截断未来步
+    if try_mode:
+        if try_current_index < len(try_move_stack):
+            try_move_stack = try_move_stack[:try_current_index]
+            try_step = try_current_index
+
+    # 记录这步棋（试下模式下也写入记谱，用于撤回与分析）
     record_move(piece_info, old_pos, target_pos, move_type, formula, res)
+
+    # 在 LAN 模式下，将本地走子同步到对方
+    if game_mode == 'lan' and net_session and not processing_remote_move:
+        try:
+            color, num, _, _ = piece_info
+            net_session.send({
+                'type': 'move',
+                'piece': {'color': color, 'num': num},
+                'from': list(old_pos),
+                'to': list(target_pos),
+                'move_type': move_type,
+                'formula': formula,
+                'res': res,
+            })
+        except Exception:
+            pass
+
+    # 在试下模式下，推入试下移动栈并更新步数与索引
+    if try_mode:
+        try_move_stack.append({
+            "piece": (color, num),
+            "from": old_pos,
+            "to": target_pos
+        })
+        try_step = len(try_move_stack)
+        try_current_index = try_step
+        # 切换试下当前玩家用于下一步
+        try_current_player = 'red' if color == 'blue' else 'blue'
     
     # 在练习模式下检查关卡胜利条件
     if game_mode == 'practice' and current_level and check_level_victory():
@@ -1594,9 +1473,193 @@ def move_piece(piece_info, target_pos, blue_pieces, red_pieces, move_type="norma
     return True  # 移动成功
 
 
+def draw_replay_controls():
+    """绘制回放控制面板"""
+    global replay_step, replay_playing, replay_speed, try_mode, try_step, try_current_index, hovered_button
+    
+    # 控制面板背景
+    control_panel_rect = pygame.Rect(CALC_AREA_X, CALC_AREA_Y + CALC_AREA_HEIGHT - 150, CALC_AREA_WIDTH, 150)
+    pygame.draw.rect(window, LIGHT_GRAY, control_panel_rect)
+    pygame.draw.rect(window, BLACK, control_panel_rect, 2)
+    
+    font = pygame.font.Font(None, 24)
+    
+    # 添加试下功能区域 - 独立显示在控制面板顶部
+    try_section_y = CALC_AREA_Y + CALC_AREA_HEIGHT - 180
+    try_section_height = 25
+    button_width = 30
+    button_height = 20
+    
+    # 添加试下按钮 - 独立显示在顶部
+    if not try_mode:
+        try_button = pygame.Rect(CALC_AREA_X + 10, try_section_y, button_width, button_height)
+        if hovered_button == "replay_button_try_button":
+            pygame.draw.rect(window, LIGHT_YELLOW, try_button)
+        else:
+            pygame.draw.rect(window, WHITE, try_button)
+        pygame.draw.rect(window, BLACK, try_button, 2)
+        try_text = font.render("T", True, BLACK)
+        try_text_rect = try_text.get_rect(center=try_button.center)
+        window.blit(try_text, try_text_rect)
+        button_areas = {'try_button': try_button}
+        
+        # 只有在非试下模式下才显示复盘控制按钮
+        # 步数显示
+        step_text = font.render(f"Step: {replay_step}/{replay_max_steps}", True, BLACK)
+        window.blit(step_text, (CALC_AREA_X + 10, CALC_AREA_Y + CALC_AREA_HEIGHT - 140))
+        
+        # 进度条
+        progress_rect = pygame.Rect(CALC_AREA_X + 10, CALC_AREA_Y + CALC_AREA_HEIGHT - 110, CALC_AREA_WIDTH - 20, 20)
+        pygame.draw.rect(window, WHITE, progress_rect)
+        pygame.draw.rect(window, BLACK, progress_rect, 2)
+        
+        if replay_max_steps > 0:
+            progress_width = int((replay_step / replay_max_steps) * (CALC_AREA_WIDTH - 24))
+            progress_fill_rect = pygame.Rect(CALC_AREA_X + 12, CALC_AREA_Y + CALC_AREA_HEIGHT - 108, progress_width, 16)
+            pygame.draw.rect(window, BLUE, progress_fill_rect)
+        
+        # 控制按钮 - 向上移动20像素
+        button_y = CALC_AREA_Y + CALC_AREA_HEIGHT - 80
+        button_width = 35
+        button_height = 25
+        button_spacing = 40
+        
+        # 上一步按钮
+        prev_button = pygame.Rect(CALC_AREA_X + 10, button_y, button_width, button_height)
+        if hovered_button == "replay_button_prev_button":
+            pygame.draw.rect(window, LIGHT_YELLOW, prev_button)
+        else:
+            pygame.draw.rect(window, WHITE, prev_button)
+        pygame.draw.rect(window, BLACK, prev_button, 2)
+        prev_text = font.render("<<", True, BLACK)
+        prev_text_rect = prev_text.get_rect(center=prev_button.center)
+        window.blit(prev_text, prev_text_rect)
+        
+        # 播放/暂停按钮
+        play_button = pygame.Rect(CALC_AREA_X + 10 + button_spacing, button_y , button_width, button_height)
+        if hovered_button == "replay_button_play_button":
+            pygame.draw.rect(window, LIGHT_YELLOW, play_button)
+        else:
+            pygame.draw.rect(window, WHITE, play_button)
+        pygame.draw.rect(window, BLACK, play_button, 2)
+        play_text = font.render("||" if replay_playing else ">", True, BLACK)
+        play_text_rect = play_text.get_rect(center=play_button.center)
+        window.blit(play_text, play_text_rect)
+        
+        # 下一步按钮
+        next_button = pygame.Rect(CALC_AREA_X + 10 + button_spacing * 2, button_y, button_width, button_height)
+        if hovered_button == "replay_button_next_button":
+            pygame.draw.rect(window, LIGHT_YELLOW, next_button)
+        else:
+            pygame.draw.rect(window, WHITE, next_button)
+        pygame.draw.rect(window, BLACK, next_button, 2)
+        next_text = font.render(">>", True, BLACK)
+        next_text_rect = next_text.get_rect(center=next_button.center)
+        window.blit(next_text, next_text_rect)
+        
+        # 重置按钮
+        reset_button = pygame.Rect(CALC_AREA_X + 10 + button_spacing * 3, button_y, button_width, button_height)
+        if hovered_button == "replay_button_reset_button":
+            pygame.draw.rect(window, LIGHT_YELLOW, reset_button)
+        else:
+            pygame.draw.rect(window, WHITE, reset_button)
+        pygame.draw.rect(window, BLACK, reset_button, 2)
+        reset_text = font.render("R", True, BLACK)
+        reset_text_rect = reset_text.get_rect(center=reset_button.center)
+        window.blit(reset_text, reset_text_rect)
+        
+        # 速度控制
+        speed_text = font.render(f"Speed: {replay_speed:.1f}x", True, BLACK)
+        window.blit(speed_text, (CALC_AREA_X + 10, button_y + 30))
+        
+        # 返回按钮区域信息
+        button_areas.update({
+            'prev_button': prev_button,
+            'play_button': play_button,
+            'next_button': next_button,
+            'reset_button': reset_button,
+            'progress_rect': progress_rect
+        })
+    else:
+        # 在试下模式下显示试下步数
+        try_step_text = font.render(f"Try Step: {try_current_index}", True, BLACK)
+        window.blit(try_step_text, (CALC_AREA_X + 10, CALC_AREA_Y + CALC_AREA_HEIGHT - 140))
+        
+        # 试下模式进度条
+        if try_step > 0:
+            try_progress_rect = pygame.Rect(CALC_AREA_X + 10, CALC_AREA_Y + CALC_AREA_HEIGHT - 110, CALC_AREA_WIDTH - 20, 20)
+            pygame.draw.rect(window, WHITE, try_progress_rect)
+            pygame.draw.rect(window, BLACK, try_progress_rect, 2)
+            
+            try_progress_width = int((try_current_index / try_step) * (CALC_AREA_WIDTH - 24))
+            try_progress_fill_rect = pygame.Rect(CALC_AREA_X + 12, CALC_AREA_Y + CALC_AREA_HEIGHT - 108, try_progress_width, 16)
+            pygame.draw.rect(window, GREEN, try_progress_fill_rect)
+        
+        # 试下模式控制按钮
+        button_y = CALC_AREA_Y + CALC_AREA_HEIGHT - 80
+        button_width = 35
+        button_height = 25
+        button_spacing = 40
+        
+        # 在试下模式下显示结束试下和撤销按钮
+        try_section_y += 20
+        
+        # 上一步按钮
+        prev_try_button = pygame.Rect(CALC_AREA_X + 10, button_y + 30, button_width, button_height)
+        if hovered_button == "replay_button_prev_try_button":
+            pygame.draw.rect(window, LIGHT_YELLOW, prev_try_button)
+        else:
+            pygame.draw.rect(window, WHITE, prev_try_button)
+        pygame.draw.rect(window, BLACK, prev_try_button, 2)
+        prev_try_text = font.render("<<", True, BLACK)
+        prev_try_text_rect = prev_try_text.get_rect(center=prev_try_button.center)
+        window.blit(prev_try_text, prev_try_text_rect)
+        
+        # 下一步按钮
+        next_try_button = pygame.Rect(CALC_AREA_X + 10 + button_spacing, button_y + 30, button_width, button_height)
+        if hovered_button == "replay_button_next_try_button":
+            pygame.draw.rect(window, LIGHT_YELLOW, next_try_button)
+        else:
+            pygame.draw.rect(window, WHITE, next_try_button)
+        pygame.draw.rect(window, BLACK, next_try_button, 2)
+        next_try_text = font.render(">>", True, BLACK)
+        next_try_text_rect = next_try_text.get_rect(center=next_try_button.center)
+        window.blit(next_try_text, next_try_text_rect)
+        
+        # 结束试下按钮
+        exit_try_button = pygame.Rect(CALC_AREA_X + 10, try_section_y + 75, button_width, button_height)
+        if hovered_button == "replay_button_exit_try_button":
+            pygame.draw.rect(window, LIGHT_YELLOW, exit_try_button)
+        else:
+            pygame.draw.rect(window, WHITE, exit_try_button)
+        pygame.draw.rect(window, BLACK, exit_try_button, 2)
+        exit_try_text = font.render("E", True, BLACK)
+        exit_try_text_rect = exit_try_text.get_rect(center=exit_try_button.center)
+        window.blit(exit_try_text, exit_try_text_rect)
+        
+        # 显示结束试下按钮提示
+        exit_try_label = font.render("End Try", True, BLACK)
+        window.blit(exit_try_label, (exit_try_button.x + 40, exit_try_button.y + 5))
+        
+        
+        # 在试下模式下返回试下相关按钮
+        button_areas = {
+            'exit_try_button': exit_try_button,
+            'prev_try_button': prev_try_button,
+            'next_try_button': next_try_button
+        }
+        
+        # 显示当前玩家
+        # current_player_text = font.render(f"Current: {'Blue' if try_current_player == 'blue' else 'Red'}", True, 
+        #                                  BLUE if try_current_player == 'blue' else RED)
+        # window.blit(current_player_text, (CALC_AREA_X + 10 + button_spacing * 2, button_y + 5))
+    
+    return button_areas
+
 def draw_calculation_area():
+
     """绘制右侧计算版区域和上方算式区域"""
-    global hovered_button, expected_result
+    global hovered_button, expected_result, try_mode
     
     # 绘制上方算式区域背景
     pygame.draw.rect(window, LIGHT_BLUE, (FORMULA_AREA_X, FORMULA_AREA_Y, FORMULA_AREA_WIDTH, FORMULA_AREA_HEIGHT))
@@ -1707,26 +1770,26 @@ def draw_calculation_area():
             pygame.draw.rect(window, (240, 220, 0), paths_rect, 5)
             
             # 添加路径标题显示实际跨越的数字
-            path_title = f"Path {idx + 1}: {sum([len(group) for group in path])} numbers"
-            title_font = pygame.font.Font(None, 20)
-            title_text = title_font.render(path_title, True, BLACK)
-            window.blit(title_text, (button_x + 5, button_y + 5))
-            button_y += 25
+            # path_title = f"Path {idx + 1}: {sum([len(group) for group in path])} numbers"
+            # title_font = pygame.font.Font(None, 20)
+            # title_text = title_font.render(path_title, True, BLACK)
+            # window.blit(title_text, (button_x + 5, button_y + 5))
+            button_y += 20
             
             for idx_x, group in enumerate(path):
                 button_y += width
                 continuous_span_area["numbers"].append([])
                 
                 # 显示这一段跨越的实际数字
-                group_title = f"Segment {idx_x + 1}: {group}"
-                segment_font = pygame.font.Font(None, 18)
-                segment_text = segment_font.render(group_title, True, BLACK)
-                window.blit(segment_text, (button_x + 10, button_y - width + 5))
+                # group_title = f"Segment {idx_x + 1}: {group}"
+                # segment_font = pygame.font.Font(None, 18)
+                # segment_text = segment_font.render(group_title, True, BLACK)
+                # window.blit(segment_text, (button_x + 10, button_y - width + 5))
                 
                 for t, num in enumerate(group):
                     font_goal = pygame.font.Font(None, 30)
                     text = font_goal.render(str(num), True, BLACK) 
-                    button_rect = pygame.Rect(button_x + (t + 0.5) * width, button_y - width // 2, number_width, number_height)
+                    button_rect = pygame.Rect(button_x + (t + 0.5) * width, button_y - width, number_width, number_height)
                     if len(paths) == 1:
                         continuous_span_area["numbers"][-1].append(button_rect)
                     if hovered_button == f"continuous_span_number_{idx_x}_{t}" and len(paths) == 1:
@@ -1734,7 +1797,7 @@ def draw_calculation_area():
                     else:
                         pygame.draw.rect(window, WHITE, button_rect)
                     pygame.draw.rect(window, YELLOW, button_rect, 2)
-                    rect = text.get_rect(center=(button_x + (t + 0.5) * width + 15, button_y))  # 居中显示
+                    rect = text.get_rect(center=(button_x + (t + 0.5) * width + 15, button_y - width // 2))  # 居中显示
                     window.blit(text, rect)           
             button_y += width * 1.5
 
@@ -1755,42 +1818,38 @@ def draw_calculation_area():
     
     # 绘制删除最后一个符号的按钮
     delete_button_rect = pygame.Rect(550, 15, 100, 30)
-    # 如果鼠标悬停在删除按钮上，使用深色
-    if hovered_button == "delete_button":
-        pygame.draw.rect(window, (100, 100, 200), delete_button_rect)  # 深蓝紫色
-    else:
-        pygame.draw.rect(window, (150, 150, 255), delete_button_rect)  # 蓝紫色
-    pygame.draw.rect(window, BLACK, delete_button_rect, 2)
-    
-    delete_text = font_numbers.render("Delete", True, WHITE)
-    delete_rect = delete_text.get_rect(center=(600, 30))
-    window.blit(delete_text, delete_rect)
-    
-    # 绘制清除按钮 - 保持在上方
     clear_button_rect = pygame.Rect(550, 55, 100, 30)
-    # 如果鼠标悬停在清除按钮上，使用深色
-    if hovered_button == "clear_button":
-        pygame.draw.rect(window, (200, 0, 0), clear_button_rect)  # 深红色
-    else:
-        pygame.draw.rect(window, RED, clear_button_rect)
-    pygame.draw.rect(window, BLACK, clear_button_rect, 2)
-    
-    clear_text = font_numbers.render("Clear", True, WHITE)
-    clear_rect = clear_text.get_rect(center=(600, 70))
-    window.blit(clear_text, clear_rect)
-    
-    # 绘制计算按钮 - 放大并移到clear右边
     calc_button_rect = pygame.Rect(660, 15, 120, 70)  # 放大按钮并移到右边
-    # 如果鼠标悬停在计算按钮上，使用深色
-    if hovered_button == "calc_button":
-        pygame.draw.rect(window, (0, 70, 200), calc_button_rect)  # 深蓝色
-    else:
-        pygame.draw.rect(window, BLUE, calc_button_rect)
-    pygame.draw.rect(window, BLACK, calc_button_rect, 2)
-    
-    calc_text = font_title.render("Calculate", True, WHITE)  # 使用更大的字体
-    calc_rect = calc_text.get_rect(center=(720, 50))  # 居中显示
-    window.blit(calc_text, calc_rect)
+    if game_mode != 'replay' or try_mode:
+        if hovered_button == "delete_button":
+            pygame.draw.rect(window, (100, 100, 200), delete_button_rect)  # 深蓝紫色
+        else:
+            pygame.draw.rect(window, (150, 150, 255), delete_button_rect)  # 蓝紫色
+        pygame.draw.rect(window, BLACK, delete_button_rect, 2)
+        
+        delete_text = font_numbers.render("Delete", True, WHITE)
+        delete_rect = delete_text.get_rect(center=(600, 30))
+        window.blit(delete_text, delete_rect)
+
+        if hovered_button == "clear_button":
+            pygame.draw.rect(window, (200, 0, 0), clear_button_rect)  # 深红色
+        else:
+            pygame.draw.rect(window, RED, clear_button_rect)
+        pygame.draw.rect(window, BLACK, clear_button_rect, 2)
+        
+        clear_text = font_numbers.render("Clear", True, WHITE)
+        clear_rect = clear_text.get_rect(center=(600, 70))
+        window.blit(clear_text, clear_rect)
+ 
+        if hovered_button == "calc_button":
+            pygame.draw.rect(window, (0, 70, 200), calc_button_rect)  # 深蓝色
+        else:
+            pygame.draw.rect(window, BLUE, calc_button_rect)
+        pygame.draw.rect(window, BLACK, calc_button_rect, 2)
+        
+        calc_text = font_title.render("Calculate", True, WHITE)  # 使用更大的字体
+        calc_rect = calc_text.get_rect(center=(720, 50))  # 居中显示
+        window.blit(calc_text, calc_rect)
 
     if board_locked and expected_result is not None:
         display_goal_rect = pygame.Rect(790, 15, 70, 70)
@@ -1801,20 +1860,6 @@ def draw_calculation_area():
         calc_text = font_goal.render(str(expected_result), True, RED) 
         calc_rect = calc_text.get_rect(center=(825, 50))  # 居中显示
         window.blit(calc_text, calc_rect)
-
-    
-    # 绘制清除按钮 - 移到上方
-    clear_button_rect = pygame.Rect(550, 55, 100, 30)
-    # 如果鼠标悬停在清除按钮上，使用深色
-    if hovered_button == "clear_button":
-        pygame.draw.rect(window, (200, 0, 0), clear_button_rect)  # 深红色
-    else:
-        pygame.draw.rect(window, RED, clear_button_rect)
-    pygame.draw.rect(window, BLACK, clear_button_rect, 2)
-    
-    clear_text = font_numbers.render("Clear", True, WHITE)
-    clear_rect = clear_text.get_rect(center=(600, 70))
-    window.blit(clear_text, clear_rect)
     
     # 绘制计算结果
     if calculation_result is not None:
@@ -1857,6 +1902,10 @@ def draw_calculation_area():
     pygame.draw.rect(window, BLACK, lock_color_rect, 2)
     lock_rect = lock_text.get_rect(center=(window_size - 80, window_size + OFFSET_Y - 25))
     window.blit(lock_text, lock_rect)
+
+    replay_button = []
+    if game_mode == 'replay':
+        replay_button = draw_replay_controls()
     
     # 返回按钮区域，用于事件处理
     return {
@@ -1868,9 +1917,9 @@ def draw_calculation_area():
         "lock_color_button": lock_color_rect,  # 添加锁定颜色按钮
         "formula_rect": formula_rect,  # 算式文本框区域
         "number_buttons": number_buttons,  # 数字按钮区域
-        "continuous_span_area": continuous_span_area 
+        "continuous_span_area": continuous_span_area,
+        "replay_button": replay_button
     }
-
 
 def calculate_result():
     """根据选择的数字和操作计算结果"""
@@ -2078,6 +2127,7 @@ def draw_custom_setup():
     
     return all_points, point_map
 
+
 def draw_level_complete():
     """Draw level completion interface"""
     window.fill(WHITE)
@@ -2107,6 +2157,25 @@ def draw_level_complete():
     hint_text = hint_font.render("Press SPACE to return to level selection", True, BLACK)
     hint_rect = hint_text.get_rect(center=(window.get_width() // 2, 400))
     window.blit(hint_text, hint_rect)
+    
+    # Back button
+    button_font = pygame.font.Font(None, 32)
+    back_button_rect = pygame.Rect(50, 50, 100, 40)
+    # 根据鼠标悬停状态改变颜色
+    if menu_hovered == "back":
+        pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
+    else:
+        pygame.draw.rect(window, WHITE, back_button_rect)
+    pygame.draw.rect(window, BLACK, back_button_rect, 2)
+    back_text = button_font.render("Back", True, BLACK)
+    back_text_rect = back_text.get_rect(center=back_button_rect.center)
+    window.blit(back_text, back_text_rect)
+    
+    # 存储按钮区域用于点击检测
+    if not hasattr(draw_level_complete, 'button_rects'):
+        draw_level_complete.button_rects = {}
+    draw_level_complete.button_rects["back"] = back_button_rect
+
 
 def draw_star(surface, center_x, center_y, size, color):
     """绘制五角星"""
@@ -2124,6 +2193,7 @@ def draw_star(surface, center_x, center_y, size, color):
         y = center_y + radius * math.sin(angle - math.pi/2)
         points.append((x, y))
     pygame.draw.polygon(surface, color, points)
+
 
 def draw_practice_levels():
     """Draw practice level selection interface"""
@@ -2197,7 +2267,11 @@ def draw_practice_levels():
     
     # Back button
     back_button_rect = pygame.Rect(50, 50, 100, 40)
-    pygame.draw.rect(window, WHITE, back_button_rect)
+    # 根据鼠标悬停状态改变颜色
+    if menu_hovered == "back":
+        pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
+    else:
+        pygame.draw.rect(window, WHITE, back_button_rect)
     pygame.draw.rect(window, BLACK, back_button_rect, 2)
     button_font = pygame.font.Font(None, 32)
     back_text = button_font.render("Back", True, BLACK)
@@ -2206,12 +2280,6 @@ def draw_practice_levels():
     
     draw_menu.button_rects["back"] = back_button_rect
 
-def get_level_button_at_pos(pos):
-    """获取点击位置对应的关卡ID"""
-    for button_name, rect in draw_menu.button_rects.items():
-        if rect.collidepoint(pos) and button_name.startswith("level_"):
-            return int(button_name.split("_")[1])
-    return None
 
 def draw_menu():
     """绘制主菜单界面"""
@@ -2240,14 +2308,25 @@ def draw_menu():
         # 获取游戏记录文件列表
         if not replay_files:
             try:
-                files = os.listdir('game_records')
+                # 使用绝对路径以防工作目录问题
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                records_dir = os.path.join(base_dir, 'game_records')
+                
+                if not os.path.exists(records_dir):
+                    os.makedirs(records_dir)
+                    
+                files = os.listdir(records_dir)
                 json_files = [f for f in files if f.endswith('.json') and f != 'custom_names.json']
-                # 按文件名（时间）排序
-                json_files.sort()
+                # 按文件名（时间）倒序排序，最新的在前
+                json_files.sort(reverse=True)
                 replay_files.extend(json_files)
                 # 加载自定义名称
-                load_custom_names()
-            except:
+                custom_names = custom_setup.load_custom_names()
+                print(f"Loaded {len(replay_files)} game records from {records_dir}")
+            except Exception as e:
+                print(f"Error loading game records: {e}")
+                import traceback
+                traceback.print_exc()
                 replay_files = []
         
         # 显示文件列表
@@ -2258,12 +2337,25 @@ def draw_menu():
         button_spacing = 60
         start_y = 150
         
+        # 分页逻辑
+        ITEMS_PER_PAGE = 8
+        total_pages = (len(replay_files) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+        if total_pages == 0: total_pages = 1
+        
+        global replay_page
+        if replay_page >= total_pages: replay_page = total_pages - 1
+        if replay_page < 0: replay_page = 0
+        
+        start_idx = replay_page * ITEMS_PER_PAGE
+        end_idx = min(start_idx + ITEMS_PER_PAGE, len(replay_files))
+        
         if not replay_files:
             no_files_text = button_font.render("No game records found", True, BLACK)
             no_files_rect = no_files_text.get_rect(center=(window.get_width()//2, 300))
             window.blit(no_files_text, no_files_rect)
         else:
-            for i, filename in enumerate(replay_files[:8]):  # 最多显示8个文件
+            for i, filename in enumerate(replay_files[start_idx:end_idx]):
+                real_index = start_idx + i
                 y = start_y + i * button_spacing
                 button_rect = pygame.Rect(
                     window.get_width()//2 - button_width//2,
@@ -2314,9 +2406,35 @@ def draw_menu():
                     # 存储按钮区域
                     draw_menu.button_rects[f"confirm_{i}"] = confirm_rect
                     draw_menu.button_rects[f"cancel_{i}"] = cancel_rect
+                elif deleting_file == filename:
+                    # 确认删除界面
+                    # 提示文本
+                    msg_font = pygame.font.Font(None, 24)
+                    msg_text = msg_font.render("Sure?", True, RED)
+                    msg_rect = msg_text.get_rect(right=button_rect.x + button_width - 110, centery=button_rect.centery)
+                    window.blit(msg_text, msg_rect)
+
+                    # Yes/Confirm
+                    yes_rect = pygame.Rect(button_rect.x + button_width - 100, button_rect.y + 10, 40, 30)
+                    pygame.draw.rect(window, RED, yes_rect)
+                    pygame.draw.rect(window, BLACK, yes_rect, 2)
+                    yes_text = small_font.render("Yes", True, WHITE)
+                    yes_text_rect = yes_text.get_rect(center=yes_rect.center)
+                    window.blit(yes_text, yes_text_rect)
+
+                    # No/Cancel
+                    no_rect = pygame.Rect(button_rect.x + button_width - 50, button_rect.y + 10, 40, 30)
+                    pygame.draw.rect(window, WHITE, no_rect)
+                    pygame.draw.rect(window, BLACK, no_rect, 2)
+                    no_text = small_font.render("No", True, BLACK)
+                    no_text_rect = no_text.get_rect(center=no_rect.center)
+                    window.blit(no_text, no_text_rect)
+
+                    draw_menu.button_rects[f"confirm_delete_{i}"] = yes_rect
+                    draw_menu.button_rects[f"cancel_delete_{i}"] = no_rect
                 else:
                     # 显示棋谱名称
-                    display_name = get_display_name(filename, i)
+                    display_name = get_display_name(filename, real_index)
                     total_moves, date_str = get_game_info(filename)
                     
                     # 主要棋谱名称
@@ -2328,24 +2446,72 @@ def draw_menu():
                     info_font = pygame.font.Font(None, 20)  # 稍微缩小的字体
                     info_text = f"{date_str}  St: {total_moves}"
                     info_surface = info_font.render(info_text, True, (100, 100, 100))  # 灰色文字
-                    info_rect = info_surface.get_rect(right=button_rect.right - 90, centery=button_rect.centery)
+                    info_rect = info_surface.get_rect(right=button_rect.right - 160, centery=button_rect.centery)
                     window.blit(info_surface, info_rect)
                     
                     # 重命名按钮
-                    rename_rect = pygame.Rect(button_rect.x + button_width - 80, button_rect.y + 10, 70, 30)
+                    rename_rect = pygame.Rect(button_rect.x + button_width - 150, button_rect.y + 10, 80, 30)
                     pygame.draw.rect(window, LIGHT_BLUE, rename_rect)
                     pygame.draw.rect(window, BLACK, rename_rect, 2)
                     rename_text = small_font.render("Rename", True, BLACK)
                     rename_text_rect = rename_text.get_rect(center=rename_rect.center)
                     window.blit(rename_text, rename_text_rect)
+
+                    # 删除按钮
+                    delete_rect = pygame.Rect(button_rect.x + button_width - 60, button_rect.y + 10, 50, 30)
+                    pygame.draw.rect(window, (255, 100, 100), delete_rect)
+                    pygame.draw.rect(window, BLACK, delete_rect, 2)
+                    delete_text = small_font.render("Del", True, BLACK)
+                    delete_text_rect = delete_text.get_rect(center=delete_rect.center)
+                    window.blit(delete_text, delete_text_rect)
                     
                     # 存储按钮区域用于点击检测
-                    draw_menu.button_rects[f"file_{i}"] = pygame.Rect(button_rect.x, button_rect.y, button_width - 90, button_height)
+                    draw_menu.button_rects[f"file_{i}"] = pygame.Rect(button_rect.x, button_rect.y, button_width - 160, button_height)
                     draw_menu.button_rects[f"rename_{i}"] = rename_rect
+                    draw_menu.button_rects[f"delete_{i}"] = delete_rect
+        
+        # 绘制翻页控件
+        control_y = start_y + ITEMS_PER_PAGE * button_spacing + 10
+        
+        # Prev 按钮
+        if replay_page > 0:
+            prev_rect = pygame.Rect(window.get_width()//2 - 140, control_y, 80, 40)
+            if menu_hovered == 'replay_prev':
+                pygame.draw.rect(window, LIGHT_YELLOW, prev_rect)
+            else:
+                pygame.draw.rect(window, WHITE, prev_rect)
+            pygame.draw.rect(window, BLACK, prev_rect, 2)
+            prev_text = button_font.render("Prev", True, BLACK)
+            prev_text_rect = prev_text.get_rect(center=prev_rect.center)
+            window.blit(prev_text, prev_text_rect)
+            draw_menu.button_rects['replay_prev'] = prev_rect
+            
+        # Next 按钮
+        if replay_page < total_pages - 1:
+            next_rect = pygame.Rect(window.get_width()//2 + 60, control_y, 80, 40)
+            if menu_hovered == 'replay_next':
+                pygame.draw.rect(window, LIGHT_YELLOW, next_rect)
+            else:
+                pygame.draw.rect(window, WHITE, next_rect)
+            pygame.draw.rect(window, BLACK, next_rect, 2)
+            next_text = button_font.render("Next", True, BLACK)
+            next_text_rect = next_text.get_rect(center=next_rect.center)
+            window.blit(next_text, next_text_rect)
+            draw_menu.button_rects['replay_next'] = next_rect
+            
+        # 页码
+        page_info = f"{replay_page + 1} / {total_pages}"
+        page_text = button_font.render(page_info, True, BLACK)
+        page_rect = page_text.get_rect(center=(window.get_width()//2, control_y + 20))
+        window.blit(page_text, page_rect)
         
         # 返回按钮
         back_button_rect = pygame.Rect(50, 50, 100, 40)
-        pygame.draw.rect(window, WHITE, back_button_rect)
+        # 根据鼠标悬停状态改变颜色
+        if menu_hovered == "back":
+            pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, back_button_rect)
         pygame.draw.rect(window, BLACK, back_button_rect, 2)
         back_text = button_font.render("Back", True, BLACK)
         back_text_rect = back_text.get_rect(center=back_button_rect.center)
@@ -2362,7 +2528,7 @@ def draw_menu():
         window.blit(title_text, title_rect)
         
         # 获取自定义棋谱文件列表
-        custom_files = load_custom_setup_files()
+        custom_files = custom_setup.load_custom_setup_files()
         
         # 显示文件列表
         button_font = pygame.font.Font(None, 32)
@@ -2398,7 +2564,7 @@ def draw_menu():
                 pygame.draw.rect(window, BLACK, button_rect, 2)
                 
                 # 显示棋谱信息
-                pieces_info, date_str = get_custom_setup_info(filename)
+                pieces_info, date_str = custom_setup.get_custom_setup_info(filename)
                 display_text = f"Setup {i+1} - {pieces_info} - {date_str}"
                 
                 text = button_font.render(display_text, True, text_color)
@@ -2418,6 +2584,71 @@ def draw_menu():
         
         draw_menu.button_rects["back"] = back_button_rect
         
+    elif game_mode == 'lan':
+        # LAN 房间创建/加入界面
+        title_font = pygame.font.Font(None, 48)
+        title_text = title_font.render("LAN - Host / Join", True, BLACK)
+        title_rect = title_text.get_rect(center=(window.get_width()//2, 100))
+        window.blit(title_text, title_rect)
+
+        button_font = pygame.font.Font(None, 32)
+
+        # Host as Blue
+        host_blue_rect = pygame.Rect(window.get_width()//2 - 260, 180, 220, 50)
+        pygame.draw.rect(window, LIGHT_BLUE if menu_hovered == 'host_blue' else WHITE, host_blue_rect)
+        pygame.draw.rect(window, BLACK, host_blue_rect, 2)
+        window.blit(button_font.render("Host as Blue", True, BLACK), host_blue_rect.move(20, 10))
+        draw_menu.button_rects['host_blue'] = host_blue_rect
+
+        # Host as Red
+        host_red_rect = pygame.Rect(window.get_width()//2 + 40, 180, 220, 50)
+        pygame.draw.rect(window, LIGHT_YELLOW if menu_hovered == 'host_red' else WHITE, host_red_rect)
+        pygame.draw.rect(window, BLACK, host_red_rect, 2)
+        window.blit(button_font.render("Host as Red", True, BLACK), host_red_rect.move(30, 10))
+        draw_menu.button_rects['host_red'] = host_red_rect
+
+        # Rooms list
+        refresh_rect = pygame.Rect(window.get_width()//2 - 120, 250, 240, 40)
+        pygame.draw.rect(window, WHITE, refresh_rect)
+        pygame.draw.rect(window, BLACK, refresh_rect, 2)
+        window.blit(button_font.render("Refresh Rooms", True, BLACK), refresh_rect.move(20, 8))
+        draw_menu.button_rects['lan_refresh'] = refresh_rect
+
+        # Hosting 状态提示（如果当前正在作为主机）
+        small_font = pygame.font.Font(None, 24)
+        if hasattr(draw_menu, 'hosting_info') and draw_menu.hosting_info:
+            hi = draw_menu.hosting_info
+            host_text = f"Hosting: {hi.get('room_name','room')} @ {hi.get('ip','?')}:{hi.get('port','?')} ({hi.get('host_side','blue')} host)"
+            host_rect = pygame.Rect(window.get_width()//2 - 250, 300, 500, 30)
+            pygame.draw.rect(window, LIGHT_BLUE, host_rect)
+            pygame.draw.rect(window, BLACK, host_rect, 2)
+            window.blit(small_font.render(host_text, True, BLACK), host_rect.move(10, 6))
+            start_y = 340
+        else:
+            start_y = 310
+
+        # Display rooms
+        if not hasattr(draw_menu, 'lan_rooms'):
+            draw_menu.lan_rooms = []
+        small_font = pygame.font.Font(None, 24)
+        for i, info in enumerate(draw_menu.lan_rooms[:6]):
+            y = start_y + i * 55
+            item_rect = pygame.Rect(window.get_width()//2 - 250, y, 500, 45)
+            pygame.draw.rect(window, LIGHT_BLUE if menu_hovered == f'lan_room_{i}' else WHITE, item_rect)
+            pygame.draw.rect(window, BLACK, item_rect, 2)
+            text = f"{info.get('room_name','room')} @ {info.get('ip',info.get('addr','?'))}:{info.get('port','?')} ({info.get('host_side','blue')} host)"
+            window.blit(small_font.render(text, True, BLACK), item_rect.move(10, 12))
+            draw_menu.button_rects[f'lan_room_{i}'] = item_rect
+
+        # 返回按钮
+        back_button_rect = pygame.Rect(50, 50, 100, 40)
+        pygame.draw.rect(window, WHITE, back_button_rect)
+        pygame.draw.rect(window, BLACK, back_button_rect, 2)
+        back_text = button_font.render("Back", True, BLACK)
+        back_text_rect = back_text.get_rect(center=back_button_rect.center)
+        window.blit(back_text, back_text_rect)
+        draw_menu.button_rects['back'] = back_button_rect
+
     else:
         # 原有的主菜单界面
         # 绘制标题
@@ -2427,7 +2658,7 @@ def draw_menu():
         window.blit(title_text, title_rect)
         
         # 菜单选项
-        menu_options = ["Play", "Replay", "Practice", "Custom Setup"]
+        menu_options = ["Play", "Replay", "Practice", "Custom Setup", "LAN"]
         button_font = pygame.font.Font(None, 48)
         button_width = 250  # 从200增加到250
         button_height = 60
@@ -2463,6 +2694,7 @@ def draw_menu():
             # 存储按钮区域用于点击检测
             draw_menu.button_rects[option] = button_rect
 
+
 def get_menu_button_at_pos(pos):
     """获取指定位置的菜单按钮"""
     if hasattr(draw_menu, 'button_rects') and draw_menu.button_rects:
@@ -2470,6 +2702,7 @@ def get_menu_button_at_pos(pos):
             if rect.collidepoint(pos):
                 return option
     return None
+
 
 def draw_level_hint(screen):
     """Draw level hint information in the top right corner of the game interface"""
@@ -2481,8 +2714,8 @@ def draw_level_hint(screen):
     level_info = levels_config['levels'][current_level - 1]
     
     # Dynamic calculation of hint box size
-    base_width = 320
-    base_height = 120
+    base_width = 240
+    base_height = 90
     
     # Adjust height based on text length
     desc_font = pygame.font.Font(None, 18)
@@ -2512,7 +2745,7 @@ def draw_level_hint(screen):
     
     # Adjust height based on number of lines
     line_count = len(objective_lines)
-    hint_height = base_height + max(0, (line_count - 2) * 20)
+    hint_height = base_height + max(0, (line_count - 2) * 18)
     hint_width = base_width
     
     # Initialize hint box position if not set
@@ -2530,22 +2763,22 @@ def draw_level_hint(screen):
     pygame.draw.rect(hint_surface, (0, 0, 0, 220), hint_rect, 2)  # Black border with some transparency
     
     # Draw level title
-    title_font = pygame.font.Font(None, 24)
+    title_font = pygame.font.Font(None, 22)
     title_text = title_font.render(f"Level {current_level}: {level_info['name']}", True, BLACK)
-    title_rect = title_text.get_rect(center=(hint_width // 2, 20))
+    title_rect = title_text.get_rect(center=(hint_width // 2, 15))
     hint_surface.blit(title_text, title_rect)
     
     # Draw objective description text
-    start_y = 45
+    start_y = 35
     for i, line in enumerate(objective_lines):
         desc_text = desc_font.render(line, True, BLACK)
-        desc_rect = desc_text.get_rect(center=(hint_width // 2, start_y + i * 20))
+        desc_rect = desc_text.get_rect(center=(hint_width // 2, start_y + i * 18))
         hint_surface.blit(desc_text, desc_rect)
     
     # Show allowed piece to move
     if allowed_piece:
         color_name = "Blue" if allowed_piece[0] == "blue" else "Red"
-        target_y = start_y + len(objective_lines) * 20 + 10
+        target_y = start_y + len(objective_lines) * 18 + 5
         target_text = desc_font.render(f"Only move: {color_name} piece {allowed_piece[1]}", True, (200, 0, 0))
         target_rect = target_text.get_rect(center=(hint_width // 2, target_y))
         hint_surface.blit(target_text, target_rect)
@@ -2557,7 +2790,9 @@ def draw_level_hint(screen):
     global hint_box_rect
     hint_box_rect = pygame.Rect(hint_x, hint_y, hint_width, hint_height)
 
+
 def draw_board():
+    global formula_text
     window.fill(WHITE)
     all_points = []
     point_map = {}  # 用于存储每个点的坐标和索引
@@ -2600,12 +2835,31 @@ def draw_board():
             # 绘制普通圆点
             pygame.draw.circle(window, color, (int(x), int(y)), RADIUS)
             pygame.draw.circle(surface=window, color=BLACK, center=(int(x), int(y)), radius=RADIUS, width=2)
+            # 在蓝/红阵营的圆点中心绘制初始编号（使用深蓝/深红）
+            raw_index = POINTS[col_index][1] + point_index * 2
+            pos_key = (col_index, raw_index)
+            num_text = None
+            num_color = None
+            # 左侧 0-3 列为蓝阵营编号
+            if col_index < 4 and pos_key in SCORING_MAP['blue']:
+                num_text = SCORING_MAP['blue'][pos_key]
+                num_color = (100, 0, 0)    # 深蓝
+            # 右侧 11-14 列为红阵营编号
+            elif col_index >= 11 and pos_key in SCORING_MAP['red']:
+                num_text = SCORING_MAP['red'][pos_key]
+                num_color = (0, 50, 150)# 深红
+            # 其他区域不绘制编号
+            if num_text is not None:
+                font = pygame.font.SysFont('Arial', int(RADIUS * 0.9))
+                text_surf = font.render(str(num_text), True, num_color)
+                text_rect = text_surf.get_rect(center=(int(x), int(y)))
+                window.blit(text_surf, text_rect)
     
-    # 如果有选中的棋子，显示备选跨越点
+    # 如果有选中的棋子，显示备选跨越点（在回放但非试下模式下不显示灰/紫点）
     potential_jumps = []
     potential_jumps2 = []
-    if selected_piece and not board_locked:
-        potential_jumps = get_potential_jump_positions(selected_piece[2], point_map, BLUE_PIECES, RED_PIECES, all_points)
+    if selected_piece and not board_locked and not (game_mode == 'replay' and not try_mode):
+        potential_jumps = get_potential_jump_positions(selected_piece[2], point_map, BLUE_PIECES, RED_PIECES, all_points, 2)
                 
         if potential_jumps:
             for col, row, _ in potential_jumps:  # 修改：现在返回col,row坐标
@@ -2633,116 +2887,64 @@ def draw_board():
         if potential_jumps2:
             # print("1:" + str(potential_jumps))
             # print("2:" + str(potential_jumps2))
+            for i in range(len(potential_jumps2) - 1, -1, -1):  # 修改：现在获取col, row坐标
+                # 使用point_map将col,row转换为x,y坐标
+                col, row, _ = potential_jumps2[i]
+                start = (selected_piece[2][0], selected_piece[2][1], (2, 2))
+                temp_paths = get_paths(start, (col, row), point_map, BLUE_PIECES, RED_PIECES, all_points, [], [])
+                if not temp_paths:
+                    potential_jumps2.pop(i)
             for col, row, _ in potential_jumps2:  # 现在统一使用棋盘坐标
                 # 使用point_map转换为屏幕坐标进行绘制
                 x, y = point_map[(col, row)]
                 pygame.draw.circle(window, PURPLE, (int(x), int(y)), RADIUS + 3, 3)  # 紫色圆环标记备选跨越点
-    
+
     # 高亮显示有效移动位置（最后绘制，确保显示在最上层）
-    if selected_piece and valid_moves and not board_locked:
+    if selected_piece and valid_moves and not board_locked and not (game_mode == 'replay' and not try_mode):
         highlight_valid_moves(window, [(x, y) for x, y, _, _ in valid_moves])
     # 如果有选中的灰色点，高亮显示
-    if selected_gray_point and board_locked:
+    if selected_gray_point and board_locked and not (game_mode == 'replay' and not try_mode):
         x, y = selected_gray_point
         pygame.draw.circle(window, SELECT, (int(x), int(y)), RADIUS + 5, 4)  # 红色高亮选中的灰色点
     
-    # 在replay模式下使用replay棋子位置，否则使用正常游戏位置
-    if game_mode == 'replay' and replay_data:
-        blue_pieces = replay_pieces_blue
-        red_pieces = replay_pieces_red
-        
-        # 绘制跨越路径上的点（半透明浅绿色）
-        if replay_path_points:
-            for pos in replay_path_points[2:]:  # 跳过起点和终点，只显示中间跨越的点
-                if pos in point_map:
-                    x, y = point_map[pos]
-                    # 创建半透明浅绿色表面
-                    transparent_surface = pygame.Surface((RADIUS * 2 + 10, RADIUS * 2 + 10), pygame.SRCALPHA)
-                    light_green_transparent = (144, 238, 144, 150)  # 浅绿色，透明度150
-                    pygame.draw.circle(transparent_surface, light_green_transparent, (RADIUS + 5, RADIUS + 5), RADIUS + 5)
-                    window.blit(transparent_surface, (int(x) - RADIUS - 5, int(y) - RADIUS - 5))
-        
-        # 绘制中间点（连跳时的新起点）用黄绿色半透明圆圈标注
-        if replay_intermediate_points:
-            for pos in replay_intermediate_points:
-                if pos in point_map:
-                    x, y = point_map[pos]
-                    # 创建半透明黄绿色表面
-                    transparent_surface = pygame.Surface((RADIUS * 2 + 10, RADIUS * 2 + 10), pygame.SRCALPHA)
-                    yellow_green_transparent = (173, 255, 47, 150)  # 黄绿色，透明度200
-                    pygame.draw.circle(transparent_surface, yellow_green_transparent, (RADIUS + 5, RADIUS + 5), RADIUS + 5)
-                    window.blit(transparent_surface, (int(x) - RADIUS - 5, int(y) - RADIUS - 5))
-        
-        # 绘制当前移动的路径点（绿色圆圈，用于起点和终点）
-        if replay_path_points and len(replay_path_points) >= 2:
-            start_pos, end_pos = replay_path_points[0], replay_path_points[1]
-            # 起点和终点用不同颜色的圆圈标注
-            if start_pos in point_map:
-                x, y = point_map[start_pos]
-                pygame.draw.circle(window, (255, 165, 0), (int(x), int(y)), RADIUS + 8, 4)  # 橙色标注起始位置
-            if end_pos in point_map:
-                x, y = point_map[end_pos]
-                pygame.draw.circle(window, (0, 255, 0), (int(x), int(y)), RADIUS + 8, 4)  # 绿色标注结束位置
-        
-
-        
-        # 如果当前步数有效且大于0，显示当前步骤的移动
-        if replay_step > 0 and replay_step <= len(replay_data.get('moves', [])):
-            current_move = replay_data['moves'][replay_step - 1]  # 获取第i步的移动（索引为i-1）
-            start_pos = (current_move['start_position']['col'], current_move['start_position']['row'])
-            end_pos = (current_move['end_position']['col'], current_move['end_position']['row'])
-            player = current_move['player']
-            piece_num = current_move['piece_number']
-            
-            # 在起点处半透明显示棋子
-            if start_pos in point_map:
-                x, y = point_map[start_pos]
-                # 创建半透明表面
-                transparent_surface = pygame.Surface((RADIUS * 2, RADIUS * 2), pygame.SRCALPHA)
-                piece_color = BLUE if player == 'blue' else RED
-                # 设置透明度为128（50%透明）
-                transparent_color = (*piece_color, 128)
-                pygame.draw.circle(transparent_surface, transparent_color, (RADIUS, RADIUS), RADIUS)
-                # 绘制半透明棋子
-                window.blit(transparent_surface, (int(x) - RADIUS, int(y) - RADIUS))
-                # 绘制棋子编号（也是半透明）
-                font = pygame.font.Font(None, 24)
-                text_surface = pygame.Surface((48, 24), pygame.SRCALPHA)
-                text = font.render(str(piece_num), True, (255, 255, 255))
-                text_surface.blit(text, (0, 0))
-                text_surface.set_alpha(128)
-                text_rect = text_surface.get_rect(center=(int(x), int(y)))
-                window.blit(text_surface, text_rect)
-    else:
-        blue_pieces = BLUE_PIECES
-        red_pieces = RED_PIECES
+    # 始终使用正常棋子位置以保持一致
+    blue_pieces = BLUE_PIECES
+    red_pieces = RED_PIECES
     
     # 绘制蓝色棋子
     for number, (col, row) in blue_pieces.items():
         if (col, row) in point_map:
             x, y = point_map[(col, row)]
-            is_selected = (game_mode != 'replay' and selected_piece and 
-                         selected_piece[0] == 'blue' and selected_piece[1] == number and not board_locked)
+            # 在回放模式下也保持选中棋子高亮（禁用灰/紫点但允许高亮）
+            is_selected = (selected_piece and selected_piece[0] == 'blue' and selected_piece[1] == number and not board_locked)
             draw_piece_with_number(window, (int(x), int(y)), RADIUS, BLUE, number, is_selected)
     
     # 绘制红色棋子
     for number, (col, row) in red_pieces.items():
         if (col, row) in point_map:
             x, y = point_map[(col, row)]
-            is_selected = (game_mode != 'replay' and selected_piece and 
-                         selected_piece[0] == 'red' and selected_piece[1] == number and not board_locked)
+            # 在回放模式下也保持选中棋子高亮（禁用灰/紫点但允许高亮）
+            is_selected = (selected_piece and selected_piece[0] == 'red' and selected_piece[1] == number and not board_locked)
             draw_piece_with_number(window, (int(x), int(y)), RADIUS, RED, number, is_selected)
     
+    # 在practice模式下绘制目标点标注
+    if game_mode == 'practice' and current_level and levels_config:
+        level_info = levels_config['levels'][current_level - 1]
+        if 'win_condition' in level_info and 'target_position' in level_info['win_condition']:
+            target_pos = level_info['win_condition']['target_position']
+            target_col, target_row = target_pos[0], target_pos[1]
+            
+            if (target_col, target_row) in point_map:
+                x, y = point_map[(target_col, target_row)]
+                # 创建半透明红色表面
+                transparent_surface = pygame.Surface((RADIUS * 2 + 20, RADIUS * 2 + 20), pygame.SRCALPHA)
+                red_transparent = (255, 0, 0, 100)  # 红色，透明度100
+                pygame.draw.circle(transparent_surface, red_transparent, (RADIUS + 10, RADIUS + 10), RADIUS + 10)
+                window.blit(transparent_surface, (int(x) - RADIUS - 10, int(y) - RADIUS - 10))
+    button_areas = draw_calculation_area()
     # 在replay模式下绘制控制面板，否则绘制计算版区域
     if game_mode == 'replay' and replay_data:
-        replay_button_areas = draw_replay_controls()
-        
-        # 显示当前移动的算式信息
-        formula_font = pygame.font.Font(None, 36)
-        formula_rect = pygame.Rect(FORMULA_AREA_X + 10, FORMULA_AREA_Y + 10, FORMULA_AREA_WIDTH - 20, 40)
-        pygame.draw.rect(window, LIGHT_BLUE, formula_rect)
-        pygame.draw.rect(window, BLACK, formula_rect, 2)
-        
+        # replay_button_areas = draw_replay_controls()
         if replay_step > 0 and replay_step <= len(replay_data.get('moves', [])):
             current_move = replay_data['moves'][replay_step - 1]
             if 'formula' in current_move and current_move['formula']:
@@ -2758,19 +2960,34 @@ def draw_board():
         else:
             formula_text_content = "No move selected"
         
-        formula_text_render = formula_font.render(formula_text_content, True, BLACK)
-        window.blit(formula_text_render, (FORMULA_AREA_X + 20, FORMULA_AREA_Y + 20))
+        if not try_mode:
+            formula_text = formula_text_content
         
-        # 直接返回回放控制按钮区域，而不是包装在字典中
-        button_areas = replay_button_areas
-    else:
-        button_areas = draw_calculation_area()
-    
     # 新增：左上角显示上帝模式提示
     if god_mode:
         font_god = pygame.font.Font(None, 28)
         god_text = font_god.render('God Mode', True, (255,0,0))
         window.blit(god_text, (20, 50))
+    
+    # Back button for REPLAY state
+    if state == "REPLAY":
+        button_font = pygame.font.Font(None, 32)
+        back_button_rect = pygame.Rect(50, 50, 100, 40)
+        # 根据鼠标悬停状态改变颜色
+        if menu_hovered == "back":
+            pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, back_button_rect)
+        pygame.draw.rect(window, BLACK, back_button_rect, 2)
+        back_text = button_font.render("Back", True, BLACK)
+        back_text_rect = back_text.get_rect(center=back_button_rect.center)
+        window.blit(back_text, back_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'replay_button_rects'):
+            draw_board.replay_button_rects = {}
+        draw_board.replay_button_rects["back"] = back_button_rect
+    
     # 新增：END状态下显示分数和胜负
     if state == "END":
         blue_score, red_score = calculate_point()
@@ -2789,6 +3006,24 @@ def draw_board():
         window.blit(text1, (window_size//2-100, window_size//2-60))
         window.blit(text2, (window_size//2-100, window_size//2))
         window.blit(text3, (window_size//2-100, window_size//2+60))
+        
+        # Back button for END state
+        button_font = pygame.font.Font(None, 32)
+        back_button_rect = pygame.Rect(50, 50, 100, 40)
+        # 根据鼠标悬停状态改变颜色
+        if menu_hovered == "back":
+            pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, back_button_rect)
+        pygame.draw.rect(window, BLACK, back_button_rect, 2)
+        back_text = button_font.render("Back", True, BLACK)
+        back_text_rect = back_text.get_rect(center=back_button_rect.center)
+        window.blit(back_text, back_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'end_button_rects'):
+            draw_board.end_button_rects = {}
+        draw_board.end_button_rects["back"] = back_button_rect
 
     # 绘制关卡提示信息（仅在practice模式下）
     if game_mode == 'practice':
@@ -2800,7 +3035,8 @@ def draw_board():
 
 
 def main():
-    global selected_piece, valid_moves, current_player, selected_numbers, operation, calculation_result, board_locked, selected_gray_point, formula_text, hovered_button, number_res, color_locked, continuous_span, paths, expected_result, continuous_span_line, state, winner, god_mode, menu_hovered, game_mode, replay_playing, replay_step, formula_res, renaming_file, rename_input, dragging_piece, available_pieces, custom_setup_pieces, BLUE_PIECES, RED_PIECES, hint_box_pos
+    global selected_piece, valid_moves, current_player, selected_numbers, operation, calculation_result, board_locked, selected_gray_point, formula_text, hovered_button, number_res, color_locked, continuous_span, paths, expected_result, continuous_span_line, state, winner, god_mode, menu_hovered, game_mode, replay_playing, replay_step, formula_res, renaming_file, rename_input, dragging_piece, available_pieces, custom_setup_pieces, BLUE_PIECES, RED_PIECES, hint_box_pos, hint_box_dragging, hint_box_offset, hint_box_rect, replay_last_update
+    global net_session, local_side, replay_page, deleting_file
     
     pygame.init()
     clock = pygame.time.Clock()
@@ -2815,8 +3051,8 @@ def main():
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                # 游戏退出时保存记录（仅在非practice模式下）
-                if game_record and game_mode != 'practice':
+                # 游戏退出时保存记录（仅在正式对局且非试下模式下）
+                if game_record and game_mode == 'play' and not try_mode:
                     save_game_record()
                 pygame.quit()
                 sys.exit()
@@ -2832,7 +3068,7 @@ def main():
                         if event.key == pygame.K_RETURN:  # 回车确认
                             if rename_input.strip():
                                 custom_names[renaming_file] = rename_input.strip()
-                                save_custom_names()
+                                custom_setup.save_custom_names(custom_names)
                             renaming_file = None
                             rename_input = ""
                         elif event.key == pygame.K_ESCAPE:  # ESC取消
@@ -2857,6 +3093,14 @@ def main():
                                 replay_files.clear()
                                 renaming_file = None
                                 rename_input = ""
+                                # 清理 LAN 会话
+                                if 'net_session' in globals() and net_session:
+                                    try:
+                                        net_session.close()
+                                    except Exception:
+                                        pass
+                                    net_session = None
+                                    local_side = None
                             elif clicked_button.startswith("level_"):
                                 if game_mode == 'practice':
                                     level_id = get_level_button_at_pos(event.pos)
@@ -2874,10 +3118,12 @@ def main():
                             elif clicked_button.startswith("custom_"):
                                 if game_mode == 'practice':
                                     file_index = int(clicked_button.split("_")[1])
-                                    custom_files = load_custom_setup_files()
+                                    custom_files = custom_setup.load_custom_setup_files()
                                     if file_index < len(custom_files):
                                         filename = custom_files[file_index]
-                                        if load_custom_setup_file(filename):
+                                        loaded_positions = custom_setup.load_custom_setup_file(filename)
+                                        if loaded_positions:
+                                            BLUE_PIECES, RED_PIECES = loaded_positions
                                             state = "GAME"
                                             game_mode = 'practice'
                                             # 重置游戏状态
@@ -2890,23 +3136,77 @@ def main():
                             elif clicked_button.startswith("file_"):
                                 if not renaming_file:  # 只有在不重命名时才能选择文件
                                     file_index = int(clicked_button.split("_")[1])
-                                    if file_index < len(replay_files):
-                                        selected_replay_file = replay_files[file_index]
+                                    ITEMS_PER_PAGE = 8
+                                    real_index = replay_page * ITEMS_PER_PAGE + file_index
+                                    if real_index < len(replay_files):
+                                        selected_replay_file = replay_files[real_index]
                                         if load_replay_file(selected_replay_file):
                                             state = "REPLAY"
                                             update_replay_positions()
                             elif clicked_button.startswith("rename_"):
                                 file_index = int(clicked_button.split("_")[1])
-                                if file_index < len(replay_files):
-                                    renaming_file = replay_files[file_index]
+                                ITEMS_PER_PAGE = 8
+                                real_index = replay_page * ITEMS_PER_PAGE + file_index
+                                if real_index < len(replay_files):
+                                    renaming_file = replay_files[real_index]
+                                    deleting_file = None  # Clear delete state
                                     # 设置当前名称作为初始输入
                                     current_name = custom_names.get(renaming_file, "")
                                     rename_input = current_name
+                            elif clicked_button.startswith("delete_"):
+                                file_index = int(clicked_button.split("_")[1])
+                                ITEMS_PER_PAGE = 8
+                                real_index = replay_page * ITEMS_PER_PAGE + file_index
+                                if real_index < len(replay_files):
+                                    deleting_file = replay_files[real_index]
+                                    renaming_file = None  # Clear rename state
+                            elif clicked_button.startswith("confirm_delete_"):
+                                file_index = int(clicked_button.split("_")[2])
+                                ITEMS_PER_PAGE = 8
+                                real_index = replay_page * ITEMS_PER_PAGE + file_index
+                                if real_index < len(replay_files):
+                                    filename_to_delete = replay_files[real_index]
+                                    if filename_to_delete == deleting_file:
+                                        try:
+                                            # 获取绝对路径
+                                            base_dir = os.path.dirname(os.path.abspath(__file__))
+                                            file_path = os.path.join(base_dir, 'game_records', filename_to_delete)
+                                            if os.path.exists(file_path):
+                                                os.remove(file_path)
+                                                print(f"Deleted file: {file_path}")
+                                            
+                                            # 从列表中移除
+                                            replay_files.pop(real_index)
+                                            
+                                            # 从自定义名称中移除
+                                            if filename_to_delete in custom_names:
+                                                del custom_names[filename_to_delete]
+                                                custom_setup.save_custom_names(custom_names)
+                                                
+                                            # 处理分页：如果当前页变为空且不是第一页，则回到上一页
+                                            total_pages = (len(replay_files) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+                                            if replay_page >= total_pages and replay_page > 0:
+                                                replay_page -= 1
+                                                
+                                            deleting_file = None
+                                                
+                                        except Exception as e:
+                                            print(f"Error deleting file: {e}")
+                            elif clicked_button.startswith("cancel_delete_"):
+                                deleting_file = None
+                            elif clicked_button == "replay_prev":
+                                if replay_page > 0:
+                                    replay_page -= 1
+                            elif clicked_button == "replay_next":
+                                ITEMS_PER_PAGE = 8
+                                total_pages = (len(replay_files) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+                                if replay_page < total_pages - 1:
+                                    replay_page += 1
                             elif clicked_button.startswith("confirm_"):
                                 file_index = int(clicked_button.split("_")[1])
                                 if renaming_file and rename_input.strip():
                                     custom_names[renaming_file] = rename_input.strip()
-                                    save_custom_names()
+                                    custom_setup.save_custom_names(custom_names)
                                 renaming_file = None
                                 rename_input = ""
                             elif clicked_button.startswith("cancel_"):
@@ -2915,9 +3215,9 @@ def main():
                             elif clicked_button == "reset_progress":
                                 # 确认重置对话框（可选）
                                 reset_practice_progress()
-                            elif game_mode != 'replay':
-                                game_mode = clicked_button.lower()
-                                if game_mode == 'play':
+                            elif game_mode is None:
+                                chosen = clicked_button.lower()
+                                if chosen == 'play':
                                     # 重置棋子位置到初始状态
                                     BLUE_PIECES = {
                                         0: [14, 10],    # 第15列第1个点
@@ -2945,14 +3245,96 @@ def main():
                                     }
                                     state = "GAME"
                                     init_game_record()
-                                elif game_mode == 'replay':
+                                    game_mode = 'play'
+                                elif chosen == 'replay':
                                     # 保持在菜单状态，显示文件选择
-                                    pass
-                                elif game_mode == 'practice':
+                                    game_mode = 'replay'
+                                    replay_page = 0
+                                elif chosen == 'practice':
                                     # 修改：保持在菜单状态，显示自定义棋谱选择
-                                    pass
-                                elif game_mode == 'custom setup':
+                                    game_mode = 'practice'
+                                elif chosen == 'custom setup':
                                     state = "CUSTOM_SETUP"
+                                    game_mode = 'custom setup'
+                                elif chosen == 'lan':
+                                    # 进入 LAN 菜单页
+                                    game_mode = 'lan'
+                            # 处理 LAN 菜单点击
+                            if game_mode == 'lan':
+                                if clicked_button == 'lan_refresh':
+                                    try:
+                                        rooms = netplay.discover_rooms(timeout=1.0)
+                                        # 如果当前是主机，确保本机房间优先显示且不被刷掉
+                                        if hasattr(draw_menu, 'hosting_info') and draw_menu.hosting_info:
+                                            hi = draw_menu.hosting_info
+                                            rooms = [hi] + [r for r in rooms
+                                                            if (r.get('ip', r.get('addr')) != hi.get('ip')
+                                                                or r.get('port') != hi.get('port'))]
+                                        draw_menu.lan_rooms = rooms
+                                    except Exception:
+                                        # 刷新失败时保留已有列表；若有 hosting_info，确保其存在于顶部
+                                        if hasattr(draw_menu, 'hosting_info') and draw_menu.hosting_info:
+                                            hi = draw_menu.hosting_info
+                                            prev = getattr(draw_menu, 'lan_rooms', []) or []
+                                            draw_menu.lan_rooms = [hi] + [r for r in prev
+                                                                          if (r.get('ip', r.get('addr')) != hi.get('ip')
+                                                                              or r.get('port') != hi.get('port'))]
+                                        else:
+                                            # 不覆盖现有列表
+                                            pass
+                                elif clicked_button == 'host_blue' or clicked_button == 'host_red':
+                                    host_side = 'blue' if clicked_button == 'host_blue' else 'red'
+                                    # 异步启动并等待连接（阻塞在后台线程）
+                                    import threading
+                                    def host_thread():
+                                        global net_session, local_side, state
+                                        try:
+                                            # 使用房间名为本机 IP 简化
+                                            room_name = f"Room-{netplay.get_local_ip()}"
+                                            # 在界面上展示 Hosting 信息，并加入列表
+                                            try:
+                                                info = {
+                                                    'type': 'room_info',
+                                                    'room_name': room_name,
+                                                    'ip': netplay.get_local_ip(),
+                                                    'port': netplay.TCP_PORT,
+                                                    'host_side': host_side,
+                                                }
+                                                draw_menu.hosting_info = info
+                                                if not hasattr(draw_menu, 'lan_rooms'):
+                                                    draw_menu.lan_rooms = []
+                                                # 将本机房间显示在顶部
+                                                draw_menu.lan_rooms = [info] + [r for r in draw_menu.lan_rooms if r.get('ip') != info['ip'] or r.get('port') != info['port']]
+                                            except Exception:
+                                                pass
+                                            net_session, _ = netplay.start_host(room_name, host_side)
+                                            local_side = host_side
+                                            # 切入游戏
+                                            state = 'GAME'
+                                            # 初始化棋子到标准开局
+                                            # 与 Play 相同布局
+                                            set_default_positions()
+                                            init_game_record()
+                                        except Exception:
+                                            net_session = None
+                                            local_side = None
+                                    threading.Thread(target=host_thread, daemon=True).start()
+                                elif clicked_button.startswith('lan_room_'):
+                                    try:
+                                        idx = int(clicked_button.split('_')[-1])
+                                        info = draw_menu.lan_rooms[idx]
+                                        ip = info.get('ip', info.get('addr'))
+                                        port = info.get('port')
+                                        session = netplay.join_room(ip, port)
+                                        if session:
+                                            net_session = session
+                                            local_side = session.side
+                                            # 切入游戏
+                                            state = 'GAME'
+                                            set_default_positions()
+                                            init_game_record()
+                                    except Exception:
+                                        pass
                 continue
             
             elif state == "CUSTOM_SETUP":
@@ -3054,80 +3436,166 @@ def main():
                 continue
             
             elif state == "REPLAY":
-                # 处理回放模式的事件
-                if event.type == pygame.MOUSEBUTTONDOWN:
+                # 处理鼠标移动事件（悬停检测）
+                if event.type == pygame.MOUSEMOTION:
+                    mouse_pos = pygame.mouse.get_pos()
+                    menu_hovered = None
+                    
+                    # 检查back按钮悬停
+                    if hasattr(draw_board, 'replay_button_rects') and 'back' in draw_board.replay_button_rects:
+                        if draw_board.replay_button_rects['back'].collidepoint(mouse_pos):
+                            menu_hovered = "back"
+                # 处理回放模式的事件   
+                elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
                         mouse_pos = pygame.mouse.get_pos()
                         all_points, point_map, button_areas, _, _ = draw_board()
-                        
+                        # 检查back按钮点击
+                        if hasattr(draw_board, 'replay_button_rects') and 'back' in draw_board.replay_button_rects:
+                            if draw_board.replay_button_rects['back'].collidepoint(mouse_pos):
+                                # 如果在试下模式，先退出试下模式
+                                if try_mode:
+                                    exit_try_mode()
+                                state = "MENU"
+                                game_mode = None
+                                continue
                         # 检查控制按钮点击
-                        if 'prev_button' in button_areas and button_areas['prev_button'].collidepoint(mouse_pos):
+                        if 'prev_button' in button_areas['replay_button'] and button_areas['replay_button']['prev_button'].collidepoint(mouse_pos):
                             if replay_step > 0:
                                 replay_step -= 1
                                 update_replay_positions()
-                        elif 'next_button' in button_areas and button_areas['next_button'].collidepoint(mouse_pos):
+                        elif 'next_button' in button_areas['replay_button'] and button_areas['replay_button']['next_button'].collidepoint(mouse_pos):
                             if replay_step < replay_max_steps:
                                 replay_step += 1
                                 update_replay_positions()
-                        elif 'play_button' in button_areas and button_areas['play_button'].collidepoint(mouse_pos):
-                            replay_playing = not replay_playing
-                        elif 'reset_button' in button_areas and button_areas['reset_button'].collidepoint(mouse_pos):
+                        elif 'reset_button' in button_areas['replay_button'] and button_areas['replay_button']['reset_button'].collidepoint(mouse_pos):
                             replay_step = 0
                             update_replay_positions()
-                        elif 'progress_rect' in button_areas and button_areas['progress_rect'].collidepoint(mouse_pos):
+                        elif 'progress_rect' in button_areas['replay_button'] and button_areas['replay_button']['progress_rect'].collidepoint(mouse_pos):
                             # 点击进度条跳转
-                            progress_rect = button_areas['progress_rect']
+                            progress_rect = button_areas['replay_button']['progress_rect']
                             click_x = mouse_pos[0] - progress_rect.x
                             progress_ratio = click_x / progress_rect.width
                             replay_step = int(progress_ratio * replay_max_steps)
                             replay_step = max(0, min(replay_step, replay_max_steps))
                             update_replay_positions()
+                        # 添加试下按钮点击处理
+                        elif 'try_button' in button_areas['replay_button'] and button_areas['replay_button']['try_button'].collidepoint(mouse_pos):
+                            enter_try_mode()
+                        # 添加结束试下按钮点击处理
+                        elif 'exit_try_button' in button_areas['replay_button'] and button_areas['replay_button']['exit_try_button'].collidepoint(mouse_pos):
+                            exit_try_mode()
+                        # 添加撤销按钮点击处理
+                        elif 'undo_button' in button_areas['replay_button'] and button_areas['replay_button']['undo_button'].collidepoint(mouse_pos):
+                            if try_mode and try_move_stack:
+                                undo_try_move()
+                        # 添加前后调整按钮点击处理
+                        elif 'prev_try_button' in button_areas['replay_button'] and button_areas['replay_button']['prev_try_button'].collidepoint(mouse_pos):
+                            if try_mode and try_current_index > 0:
+                                undo_try_move()
+                        elif 'next_try_button' in button_areas['replay_button'] and button_areas['replay_button']['next_try_button'].collidepoint(mouse_pos):
+                            if try_mode and try_current_index < try_step:
+                                forward_try_move()
                 
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        state = "MENU"
-                        game_mode = None
-                    elif event.key == pygame.K_SPACE:
-                        replay_playing = not replay_playing
+                        # 如果在试下模式，先退出试下模式
+                        if try_mode:
+                            exit_try_mode()
+                        else:
+                            state = "MENU"
+                            game_mode = None
                     elif event.key == pygame.K_LEFT:
-                        if replay_step > 0:
+                        if try_mode:
+                            if try_move_stack:
+                                undo_try_move()
+                        elif replay_step > 0:
                             replay_step -= 1
                             update_replay_positions()
                     elif event.key == pygame.K_RIGHT:
-                        if replay_step < replay_max_steps:
+                        if try_mode:
+                            if try_current_index < try_step:
+                                forward_try_move()
+                        elif replay_step < replay_max_steps:
                             replay_step += 1
                             update_replay_positions()
-                
-                # 自动播放逻辑
-                if replay_playing:
-                    current_time = pygame.time.get_ticks()
-                    if current_time - replay_last_update > (1000 / replay_speed):
-                        if replay_step < replay_max_steps:
+                        elif replay_step < replay_max_steps:
                             replay_step += 1
                             update_replay_positions()
-                            replay_last_update = current_time
-                        else:
-                            replay_playing = False
-                continue
             
-            if state == "END":
-                if event.type == pygame.KEYDOWN:
-                    # 游戏结束时保存记录（仅在非practice模式下）
-                    if game_mode != 'practice':
+            elif state == "END":
+                # 处理鼠标移动事件（悬停检测）
+                if event.type == pygame.MOUSEMOTION:
+                    mouse_pos = pygame.mouse.get_pos()
+                    menu_hovered = None
+                    
+                    # 检查back按钮悬停
+                    if hasattr(draw_board, 'end_button_rects') and 'back' in draw_board.end_button_rects:
+                        if draw_board.end_button_rects['back'].collidepoint(mouse_pos):
+                            menu_hovered = "back"
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 1:
+                        mouse_pos = pygame.mouse.get_pos()
+                        # 检查back按钮点击
+                        if hasattr(draw_board, 'end_button_rects') and 'back' in draw_board.end_button_rects:
+                            if draw_board.end_button_rects['back'].collidepoint(mouse_pos):
+                                # 游戏结束时保存记录（仅在正式对局且非试下模式下）
+                                if game_record and game_mode == 'play' and not try_mode:
+                                    save_game_record()
+                                state = "MENU"
+                                continue
+                elif event.type == pygame.KEYDOWN:
+                    # 游戏结束时保存记录（仅在正式对局且非试下模式下）
+                    if game_record and game_mode == 'play' and not try_mode:
                         save_game_record()
-                    # 返回主菜单
-                    state = "MENU"
+                    if game_mode == 'lan' and event.key == pygame.K_r:
+                        # LAN 模式：按 R 重置棋盘并交换红蓝
+                        if net_session:
+                            try:
+                                net_session.send({'type': 'reset_swap'})
+                            except Exception:
+                                pass
+                        if local_side:
+                            local_side = 'red' if local_side == 'blue' else 'blue'
+                        set_default_positions()
+                        init_game_record()
+                        winner = None
+                        board_locked = False
+                        selected_piece = None
+                        state = 'GAME'
+                    else:
+                        # 返回主菜单
+                        state = "MENU"
                 continue
             
-            if state == "LEVEL_COMPLETE":
-                if event.type == pygame.KEYDOWN:
+            elif state == "LEVEL_COMPLETE":
+                # 处理鼠标移动事件（悬停检测）
+                if event.type == pygame.MOUSEMOTION:
+                    mouse_pos = pygame.mouse.get_pos()
+                    menu_hovered = None
+                    
+                    # 检查back按钮悬停
+                    if hasattr(draw_level_complete, 'button_rects') and 'back' in draw_level_complete.button_rects:
+                        if draw_level_complete.button_rects['back'].collidepoint(mouse_pos):
+                            menu_hovered = "back"
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 1:
+                        mouse_pos = pygame.mouse.get_pos()
+                        # 检查back按钮点击
+                        if hasattr(draw_level_complete, 'button_rects') and 'back' in draw_level_complete.button_rects:
+                            if draw_level_complete.button_rects['back'].collidepoint(mouse_pos):
+                                state = "MENU"
+                                game_mode = "practice"
+                                current_level = None
+                                continue
+                elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_SPACE:
                         state = "MENU"
                         game_mode = "practice"
                         current_level = None
                 continue
             
-            if state == "GAME":
+            elif state == "GAME":
                 # 只在非练习模式下进行胜负判定
                 if game_mode != 'practice':
                     if check_win() == "blue":
@@ -3136,6 +3604,36 @@ def main():
                     elif check_win() == "red":
                         winner = "red"
                         state = "END"
+
+                # LAN 模式下轮询网络消息
+                if game_mode == 'lan' and net_session:
+                    for msg in net_session.poll():
+                        if msg.get('type') == 'move':
+                            piece = msg.get('piece', {})
+                            color = piece.get('color')
+                            num = piece.get('num')
+                            frm = tuple(msg.get('from'))
+                            to = tuple(msg.get('to'))
+                            mv_type = msg.get('move_type', 'normal')
+                            formula = msg.get('formula')
+                            res = msg.get('res')
+                            # 仅应用对方的走子
+                            if color and num is not None and local_side and color != local_side:
+                                # 构造 piece_info
+                                piece_info = (color, num, frm, None)
+                                processing_remote_move = True
+                                move_piece(piece_info, to, BLUE_PIECES, RED_PIECES, mv_type, formula, res)
+                                processing_remote_move = False
+                        elif msg.get('type') == 'reset_swap':
+                            # 交换执子颜色并重置棋盘
+                            if local_side:
+                                local_side = 'red' if local_side == 'blue' else 'blue'
+                            set_default_positions()
+                            init_game_record()
+                            winner = None
+                            board_locked = False
+                            selected_piece = None
+                            state = 'GAME'
 
             # 处理鼠标移动事件
             if event.type == pygame.MOUSEMOTION:
@@ -3153,7 +3651,6 @@ def main():
                 
                 # 重置悬停状态
                 hovered_button = None
-                
                 # 获取按钮区域
                 _, _, button_areas, _, _ = draw_board()
                 
@@ -3175,25 +3672,31 @@ def main():
                 if "calc_button" in button_areas and button_areas["calc_button"].collidepoint(mouse_pos):
                     hovered_button = "calc_button"
                 
-                # 检查是否悬停在清除按钮上
-                elif "clear_button" in button_areas and button_areas["clear_button"].collidepoint(mouse_pos):
+                # 回放/试下控制按钮悬停（不要阻断其他按钮）
+                if "replay_button" in button_areas and len(button_areas["replay_button"]) != 0:
+                    for key, rect in button_areas["replay_button"].items():
+                        if rect.collidepoint(mouse_pos):
+                            hovered_button = f"replay_button_{key}"
+                            break
+                # 检查是否悬停在清除按钮上（与回放控件并行检测）
+                if hovered_button is None and "clear_button" in button_areas and button_areas["clear_button"].collidepoint(mouse_pos):
                     hovered_button = "clear_button"
                 
-                # 检查是否悬停在删除按钮上
-                elif "delete_button" in button_areas and button_areas["delete_button"].collidepoint(mouse_pos):
+                # 检查是否悬停在删除按钮上（与回放控件并行检测）
+                if hovered_button is None and "delete_button" in button_areas and button_areas["delete_button"].collidepoint(mouse_pos):
                     hovered_button = "delete_button"
                 
-                # 检查是否悬停在取消按钮上
-                elif "cancel_button" in button_areas and button_areas["cancel_button"].collidepoint(mouse_pos):
+                # 检查是否悬停在取消按钮上（与回放控件并行检测）
+                if hovered_button is None and "cancel_button" in button_areas and button_areas["cancel_button"].collidepoint(mouse_pos):
                     hovered_button = "cancel_button"
                 
-                # 检查是否悬停在锁定颜色按钮上
-                elif "lock_color_button" in button_areas and button_areas["lock_color_button"].collidepoint(mouse_pos):
+                # 检查是否悬停在锁定颜色按钮上（与回放控件并行检测）
+                if hovered_button is None and "lock_color_button" in button_areas and button_areas["lock_color_button"].collidepoint(mouse_pos):
                     hovered_button = "lock_color_button"
                 
                 elif "continuous_span_area" in button_areas:
                     if len(button_areas["continuous_span_area"]["paths"]) > 1:
-                        for num, rect in enumerate(button_areas["continuous_span_area"]["paths"]):
+                        for num, rect in enumerate[Any](button_areas["continuous_span_area"]["paths"]):
                             if rect.collidepoint(mouse_pos):
                                 hovered_button = f"continuous_span_{str(num)}"
                                 break
@@ -3205,8 +3708,7 @@ def main():
                                     hovered_button = f"continuous_span_number_{str(idx_x)}_{str(idx_y)}"
                                     break
                 # 检查是否悬停在棋盘上
-                
-            
+  
             # 处理键盘事件
             elif event.type == pygame.KEYDOWN:
                 # 如果正在重命名，处理重命名输入
@@ -3217,7 +3719,7 @@ def main():
                         # 确认重命名
                         if rename_input.strip():
                             custom_names[renaming_file] = rename_input.strip()
-                            save_custom_names()
+                            custom_setup.save_custom_names(custom_names)
                         renaming_file = None
                         rename_input = ""
                     elif event.key == pygame.K_ESCAPE:
@@ -3230,8 +3732,8 @@ def main():
                 
                 # 在GAME状态下按ESC键退出到主界面
                 if state == "GAME" and event.key == pygame.K_ESCAPE:
-                    # 保存当前游戏记录（仅在非practice模式下）
-                    if game_record and game_mode != 'practice':
+                    # 保存当前游戏记录（仅在正式对局且非试下模式下）
+                    if game_record and game_mode == 'play' and not try_mode:
                         save_game_record()
                     # 重置游戏状态
                     state = "MENU"
@@ -3322,6 +3824,9 @@ def main():
                             update_replay_positions()
                         elif event.key == pygame.K_ESCAPE:
                             # 退出回放模式
+                            # 如果在试下模式，先退出试下模式
+                            if try_mode:
+                                exit_try_mode()
                             state = "MENU"
                             game_mode = None
                             replay_data = None
@@ -3340,8 +3845,12 @@ def main():
                     
                     all_points, point_map, button_areas, potential_jumps, potential_jumps2 = draw_board()
                     
-                    # 回放模式下不允许棋盘操作
-                    if game_mode == 'replay':
+                    # 回放模式下不允许棋盘操作（试下模式除外）
+                    if game_mode == 'replay' and not try_mode:
+                        continue
+
+                    # LAN 模式下，轮到对方时禁用本地操作
+                    if game_mode == 'lan' and local_side and current_player != local_side:
                         continue
                     
                     # 上帝模式：点击棋子后再点击任意点即可移动
@@ -3525,6 +4034,15 @@ def main():
                                     list = button_areas["continuous_span_area"]["numbers"][idx_x]
                                     if continuous_span_line != -1 and idx_x != continuous_span_line:
                                         continue
+                                    
+                                    # 检查是否跨行选择：如果当前正在进行某行的计算，则只能选择该行的数字
+                                    if len(number_res) > 0:
+                                        last_row_idx = number_res[-1][0]
+                                        if last_row_idx != -114514:
+                                            active_row = abs(last_row_idx) - 1
+                                            if idx_x != active_row:
+                                                continue
+
                                     for idx_y in range(len(list) - 1, -1, -1):
                                         rect = button_areas["continuous_span_area"]["numbers"][idx_x][idx_y]
                                         if rect.collidepoint(mouse_pos):
@@ -3580,39 +4098,59 @@ def main():
                         # 切换颜色锁定状态
                         color_locked = not color_locked
                     
-                    # 处理回放控制按钮点击
-                    if game_mode == 'replay' and 'replay_controls' in button_areas:
-                        controls = button_areas['replay_controls']
-                        
-                        if controls['prev_button'].collidepoint(mouse_pos):
-                            # 上一步
-                            if replay_step > 0:
-                                replay_step -= 1
+                    # 处理回放控制按钮点击（仅在命中控件时中断后续棋盘处理）
+                    if game_mode == 'replay' and 'replay_button' in button_areas:
+                        controls = button_areas['replay_button']
+                        handled_control_click = False
+                        if not try_mode:
+                            # 非试下模式下，处理复盘控制按钮
+                            if 'prev_button' in controls and controls['prev_button'].collidepoint(mouse_pos):
+                                if replay_step > 0:
+                                    replay_step -= 1
+                                    update_replay_positions()
+                                handled_control_click = True
+                            elif 'next_button' in controls and controls['next_button'].collidepoint(mouse_pos):
+                                if replay_step < replay_max_steps:
+                                    replay_step += 1
+                                    update_replay_positions()
+                                handled_control_click = True
+                            elif 'play_button' in controls and controls['play_button'].collidepoint(mouse_pos):
+                                replay_playing = not replay_playing
+                                handled_control_click = True
+                            elif 'reset_button' in controls and controls['reset_button'].collidepoint(mouse_pos):
+                                replay_step = 0
+                                replay_playing = False
                                 update_replay_positions()
-                        elif controls['next_button'].collidepoint(mouse_pos):
-                            # 下一步
-                            if replay_step < replay_max_steps:
-                                replay_step += 1
+                                handled_control_click = True
+                            elif 'progress_rect' in controls and controls['progress_rect'].collidepoint(mouse_pos):
+                                progress_x = mouse_pos[0] - controls['progress_rect'].x
+                                progress_ratio = progress_x / controls['progress_rect'].width
+                                replay_step = int(progress_ratio * replay_max_steps)
+                                replay_step = max(0, min(replay_step, replay_max_steps))
                                 update_replay_positions()
-                        elif controls['play_button'].collidepoint(mouse_pos):
-                            # 播放/暂停
-                            replay_playing = not replay_playing
-                        elif controls['reset_button'].collidepoint(mouse_pos):
-                            # 重置
-                            replay_step = 0
-                            replay_playing = False
-                            update_replay_positions()
-                        elif controls['progress_rect'].collidepoint(mouse_pos):
-                            # 点击进度条跳转
-                            progress_x = mouse_pos[0] - controls['progress_rect'].x
-                            progress_ratio = progress_x / controls['progress_rect'].width
-                            replay_step = int(progress_ratio * replay_max_steps)
-                            replay_step = max(0, min(replay_step, replay_max_steps))
-                            update_replay_positions()
-                        continue
+                                handled_control_click = True
+                        else:
+                            # 试下模式下，处理试下相关按钮
+                            if 'exit_try_button' in controls and controls['exit_try_button'].collidepoint(mouse_pos):
+                                exit_try_mode()
+                                handled_control_click = True
+                            elif 'undo_button' in controls and controls['undo_button'].collidepoint(mouse_pos):
+                                if try_move_stack:
+                                    undo_try_move()
+                                    handled_control_click = True
+                            elif 'prev_try_button' in controls and controls['prev_try_button'].collidepoint(mouse_pos):
+                                if try_current_index > 0 and try_move_stack:
+                                    undo_try_move()
+                                    handled_control_click = True
+                            elif 'next_try_button' in controls and controls['next_try_button'].collidepoint(mouse_pos):
+                                if try_current_index < try_step:
+                                    forward_try_move()
+                                    handled_control_click = True
+                        if handled_control_click:
+                            continue
                     
                     # 如果棋盘已锁定或在回放模式，不允许进行棋盘操作
-                    if board_locked or game_mode == 'replay':
+                    if board_locked:
                         continue
                     
                     # 优先检查绿圈点击（有效移动位置）
@@ -3643,8 +4181,7 @@ def main():
                             
                             # 进行路径搜索
                             start = (selected_piece[2][0], selected_piece[2][1], (2, 2))
-                            paths = []  # 清空之前的路径
-                            get_paths(start, selected_gray_point, point_map, BLUE_PIECES, RED_PIECES, all_points, [], [])
+                            paths = get_paths(start, selected_gray_point, point_map, BLUE_PIECES, RED_PIECES, all_points, [], [])
                             
                             # 清理空路径
                             for path in paths[:]:
@@ -3667,8 +4204,8 @@ def main():
                                 formula_text = ""       # 重置算式文本
                                 operation = None        # 重置运算符
                                 calculation_result = None  # 重置计算结果
-                                print(f"找到 {len(paths)} 条路径，采用紫色判定模式")
-                                print(selected_piece, selected_gray_point)
+                                # print(f"找到 {len(paths)} 条路径，采用紫色判定模式")
+                                # print(selected_piece, selected_gray_point)
                             
                             break
                     
@@ -3683,7 +4220,7 @@ def main():
                             continuous_span = True
                             print(selected_piece, selected_gray_point)
                             start = (selected_piece[2][0], selected_piece[2][1], (2, 2))
-                            get_paths(start, selected_gray_point, point_map, BLUE_PIECES, RED_PIECES, all_points, [], [])
+                            paths = get_paths(start, selected_gray_point, point_map, BLUE_PIECES, RED_PIECES, all_points, [], [])
                             # print(paths)
                             for path in paths:
                                 if path == []:
