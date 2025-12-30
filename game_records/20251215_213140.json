@@ -1,0 +1,26 @@
+{
+  "game_info": {
+    "start_time": "2025-12-15T21:31:40.452273",
+    "end_time": "2025-12-15T21:33:01.204844",
+    "total_moves": 1,
+    "winner": null
+  },
+  "moves": [
+    {
+      "move_number": 1,
+      "player": "blue",
+      "piece_number": 7,
+      "start_position": {
+        "col": 12,
+        "row": 12
+      },
+      "end_position": {
+        "col": 10,
+        "row": 10
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T21:31:42.379161",
+      "paths": null
+    }
+  ]
+}

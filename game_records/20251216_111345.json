@@ -1,0 +1,232 @@
+{
+  "game_info": {
+    "start_time": "2025-12-16T11:13:45.480602",
+    "end_time": "2025-12-16T11:26:06.157538",
+    "total_moves": 10,
+    "winner": null
+  },
+  "moves": [
+    {
+      "move_number": 1,
+      "player": "blue",
+      "piece_number": 2,
+      "start_position": {
+        "col": 11,
+        "row": 9
+      },
+      "end_position": {
+        "col": 10,
+        "row": 8
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-16T11:13:53.870765",
+      "paths": null
+    },
+    {
+      "move_number": 2,
+      "player": "red",
+      "piece_number": 0,
+      "start_position": {
+        "col": 0,
+        "row": 10
+      },
+      "end_position": {
+        "col": 4,
+        "row": 6
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-16T11:14:00.280033",
+      "paths": [
+        8,
+        7,
+        1
+      ],
+      "formula": [
+        "8-7-1"
+      ]
+    },
+    {
+      "move_number": 3,
+      "player": "blue",
+      "piece_number": 0,
+      "start_position": {
+        "col": 14,
+        "row": 10
+      },
+      "end_position": {
+        "col": 10,
+        "row": 14
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-16T11:14:15.736602",
+      "paths": [
+        8,
+        7,
+        1
+      ],
+      "formula": [
+        "8-7-1"
+      ]
+    },
+    {
+      "move_number": 4,
+      "player": "red",
+      "piece_number": 2,
+      "start_position": {
+        "col": 3,
+        "row": 11
+      },
+      "end_position": {
+        "col": 4,
+        "row": 10
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-16T11:14:24.175977",
+      "paths": null
+    },
+    {
+      "move_number": 5,
+      "player": "blue",
+      "piece_number": 9,
+      "start_position": {
+        "col": 13,
+        "row": 9
+      },
+      "end_position": {
+        "col": 10,
+        "row": 6
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-16T11:14:50.247366",
+      "paths": [
+        4,
+        5
+      ],
+      "formula": [
+        "4+5"
+      ]
+    },
+    {
+      "move_number": 6,
+      "player": "red",
+      "piece_number": 9,
+      "start_position": {
+        "col": 1,
+        "row": 11
+      },
+      "end_position": {
+        "col": 4,
+        "row": 12
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-16T11:15:25.982912",
+      "paths": [
+        [
+          -114514,
+          6,
+          3
+        ],
+        [
+          -1,
+          2
+        ]
+      ],
+      "formula": [
+        "6÷3",
+        "2"
+      ]
+    },
+    {
+      "move_number": 7,
+      "player": "blue",
+      "piece_number": 5,
+      "start_position": {
+        "col": 12,
+        "row": 8
+      },
+      "end_position": {
+        "col": 9,
+        "row": 5
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-16T11:17:48.628911",
+      "paths": [
+        9,
+        4
+      ],
+      "formula": [
+        "9-4"
+      ]
+    },
+    {
+      "move_number": 8,
+      "player": "red",
+      "piece_number": 8,
+      "start_position": {
+        "col": 1,
+        "row": 9
+      },
+      "end_position": {
+        "col": 5,
+        "row": 5
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-16T11:18:41.310739",
+      "paths": [
+        7,
+        1,
+        0
+      ],
+      "formula": [
+        "7+1+0"
+      ]
+    },
+    {
+      "move_number": 9,
+      "player": "blue",
+      "piece_number": 0,
+      "start_position": {
+        "col": 10,
+        "row": 14
+      },
+      "end_position": {
+        "col": 3,
+        "row": 11
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-16T11:19:05.662047",
+      "paths": [
+        [
+          -114514,
+          9,
+          2
+        ],
+        [
+          -1,
+          2,
+          5
+        ]
+      ],
+      "formula": [
+        "9-2",
+        "2+5"
+      ]
+    },
+    {
+      "move_number": 10,
+      "player": "red",
+      "piece_number": 0,
+      "start_position": {
+        "col": 4,
+        "row": 6
+      },
+      "end_position": {
+        "col": 4,
+        "row": 8
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-16T11:19:42.511709",
+      "paths": null
+    }
+  ]
+}

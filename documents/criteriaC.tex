@@ -1,0 +1,668 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{amsmath}
+
+\geometry{margin=2.5cm}
+
+% Code listing style
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue}\bfseries,
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=5pt,
+    backgroundcolor=\color{gray!10},
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    frame=single,
+    rulecolor=\color{black},
+    tabsize=2,
+    captionpos=b,
+    breaklines=true,
+    breakatwhitespace=false,
+    escapeinside={\%*}{*)}
+}
+
+\title{Criteria C: Development}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+This document presents the core algorithms and key code implementations of the International Number Chess game system. The code demonstrates the implementation of recursive path-finding algorithms, stack-based state management, game logic, and data persistence mechanisms.
+
+\section{Core Algorithm Implementations}
+
+\subsection{Recursive Depth-First Search for Path Finding}
+
+The \texttt{get\_paths()} function implements a recursive depth-first search algorithm to find all valid paths for continuous span moves. This is one of the most complex algorithms in the system.
+
+\begin{lstlisting}[caption=Recursive DFS Path Finding Algorithm, label=lst:get_paths]
+def get_paths(start, end, point_map, blue_pieces, red_pieces, all_points, current_jumps=None, path=None):
+    """Return array of all feasible paths without modifying global variables"""
+    if current_jumps is None:
+        current_jumps = []
+    if path is None:
+        path = []
+    res_paths = []
+    start_col, start_row = start[0], start[1]
+    end_col, end_row = end[0], end[1]
+    first_check = True
+    
+    # Base case: reached the target position
+    if start_col == end_col and start_row == end_row:
+        if first_check:
+            res_num = -1
+            # Validate that all path segments calculate to the same value
+            for node in path:
+                if len(node) == 1:
+                    if res_num == -1:
+                        res_num = node[0]
+                    elif res_num != node[0]:
+                        return []  # Path segments have different values, invalid
+        res_paths.append(path)
+        return res_paths
+
+    # Get all potential jump positions from current position
+    new_pos = get_potential_jump_positions((start[0], start[1]), point_map, 
+                                           blue_pieces, red_pieces, all_points, 0)
+    # Add current position to visited set (using list as stack)
+    current_jumps.append((start_col, start_row))
+    prev_direction = start[2]
+    
+    # Recursive case: explore each potential next position
+    for (next_col, next_row, direction) in new_pos:
+        # Check if position not visited and direction is valid
+        if (next_col, next_row) not in current_jumps and not in_opposite_direction(prev_direction, direction, True):
+            res = []
+            # Copy current path
+            for node in path:
+                res.append(node)
+            # Add numbers from current segment to path
+            res.append(get_numbers((start_col, start_row), (next_col, next_row), point_map))
+            # Recursively search from next position
+            child_paths = get_paths((next_col, next_row, direction), end, point_map, 
+                                   blue_pieces, red_pieces, all_points, current_jumps, res)
+            if child_paths:
+                res_paths.extend(child_paths)
+    
+    # Backtracking: remove current position from visited set
+    current_jumps.pop()
+    return res_paths
+\end{lstlisting}
+
+\textbf{Key Features}:
+\begin{itemize}
+    \item Uses recursion with backtracking to explore all possible paths
+    \item Maintains a visited set (implemented as a list) to avoid cycles
+    \item Validates that all path segments calculate to the same value
+    \item Returns all valid paths, not just the first one found
+\end{itemize}
+
+\subsection{Potential Jump Position Calculation}
+
+The \texttt{get\_potential\_jump\_positions()} function finds all valid positions a piece can jump to from its current position. This function is fundamental to the path-finding algorithm.
+
+\begin{lstlisting}[caption=Get Potential Jump Positions, label=lst:get_potential_jump]
+def get_potential_jump_positions(piece_pos, point_map, blue_pieces, red_pieces, all_points, start_from=1):
+    """
+    Get potential jump positions for a piece
+    Use get_line_coordinates function, calculate based on col and row coordinates
+    Return board coordinates (col, row) instead of screen coordinates (x, y)
+    """
+    col, row = piece_pos
+    
+    # Get all piece positions
+    all_piece_positions = get_all_piece_positions(blue_pieces, red_pieces)
+    
+    # Get all empty positions
+    empty_positions = get_empty_positions(point_map, blue_pieces, red_pieces)
+    empty_pos_list = [pos for pos, _ in empty_positions]
+    
+    potential_jumps = []
+    
+    # Use get_line_coordinates to get all points in three directions
+    left_diagonal, right_diagonal, horizontal_line = get_line_coordinates(col, row, point_map)
+    
+    # Process three direction lines: left diagonal, right diagonal, horizontal
+    all_lines = [left_diagonal, right_diagonal, horizontal_line]
+    
+    for line_coords in all_lines:
+        # Find current piece's position index on this line
+        current_index = -1
+        for i, (line_col, line_row) in enumerate(line_coords):
+            if line_col == col and line_row == row:
+                current_index = i
+                break
+        
+        if current_index == -1:
+            continue  # Current piece not on this line, skip
+        
+        # Check two directions: forward and backward
+        directions = [1, -1]  # 1 means forward, -1 means backward
+        
+        for direction in directions:
+            # Start from current position, search along direction for pieces
+            piece_count = 0
+            i = current_index + direction
+            
+            while 0 <= i < len(line_coords):
+                check_col, check_row = line_coords[i]
+                
+                # Check if there is a piece at this position
+                if (check_col, check_row) in all_piece_positions:
+                    piece_count += 1
+                    
+                    # If reached required piece count, check next position
+                    if piece_count >= start_from:
+                        next_index = i + direction
+                        if 0 <= next_index < len(line_coords):
+                            next_col, next_row = line_coords[next_index]
+                            
+                            # Check if next position is empty
+                            if (next_col, next_row) in empty_pos_list:
+                                # Calculate direction value (for compatibility)
+                                if (next_col, next_row) in point_map and (col, row) in point_map:
+                                    current_x, current_y = point_map[(col, row)]
+                                    next_x, next_y = point_map[(next_col, next_row)]
+                                    direction_value = get_direction((current_x, current_y), (next_x, next_y))
+                                    # Return board coordinates instead of screen coordinates
+                                    potential_jumps.append((next_col, next_row, direction_value))
+                
+                i += direction
+    
+    return potential_jumps
+\end{lstlisting}
+
+\textbf{Key Features}:
+\begin{itemize}
+    \item Searches in three directions: left diagonal, right diagonal, and horizontal
+    \item Checks both forward and backward directions along each line
+    \item Counts pieces to determine valid jump positions
+    \item Returns board coordinates (col, row) for consistency
+\end{itemize}
+
+\subsection{Recursive Jump Position Expansion}
+
+The \texttt{get\_potential\_jump\_recursion()} function recursively expands jump positions to find all possible multi-hop jump sequences. This is used for continuous span calculations.
+
+\begin{lstlisting}[caption=Recursive Jump Position Expansion, label=lst:get_potential_jump_recursion]
+def get_potential_jump_recursion(point_map, blue_pieces, red_pieces, all_points, initial_jumps, potential_jumps, potential_jumps2):
+    """Recursively expand jump positions to find all possible multi-hop sequences"""
+    for (col, row, prev_direction) in potential_jumps:
+        # Get additional jump positions from current position
+        additional_items = get_potential_jump_positions((col, row), point_map, blue_pieces, red_pieces, all_points, 0)
+        
+        # Iterate backwards to safely remove items during iteration
+        for i in range(len(additional_items) - 1, -1, -1):
+            next_col, next_row, direction = additional_items[i]
+            # Use new check function, uniformly handle board coordinates
+            if (not_in_pieces_board_coords(next_col, next_row, potential_jumps2) and 
+                not_in_pieces_board_coords(next_col, next_row, potential_jumps) and 
+                not_in_pieces_board_coords(next_col, next_row, initial_jumps) and 
+                not in_opposite_direction(prev_direction, direction, True)):
+                # Uniformly store board coordinates
+                potential_jumps2.append((next_col, next_row, direction))
+            else:
+                # Remove invalid positions
+                additional_items.pop(i)
+        
+        # Recursively expand from remaining valid positions
+        potential_jumps2 = get_potential_jump_recursion(point_map, blue_pieces, red_pieces, all_points, 
+                                                       initial_jumps, additional_items, potential_jumps2)
+    return potential_jumps2
+\end{lstlisting}
+
+\textbf{Key Features}:
+\begin{itemize}
+    \item Recursively expands jump positions to find multi-hop sequences
+    \item Filters out duplicate positions and invalid directions
+    \item Maintains separate lists for initial jumps, current potential jumps, and accumulated results
+    \item Prevents cycles by checking against all previous jump lists
+\end{itemize}
+
+\subsection{Stack-Based State Management for Try Mode}
+
+The try mode feature allows players to experiment with moves and undo them. It uses a stack data structure to maintain move history.
+
+\begin{lstlisting}[caption=Enter Try Mode Function, label=lst:enter_try]
+def enter_try_mode():
+    """Enter try mode"""
+    global try_mode, try_move_stack, try_original_blue, try_original_red, 
+           try_current_player, try_step, try_current_index, current_player, 
+           selected_piece, valid_moves, board_locked, BLUE_PIECES, RED_PIECES, 
+           formula_text, try_record_start_index, game_record
+    
+    # Only allow entering try mode from replay mode when not already in try mode
+    if game_mode != 'replay' or try_mode:
+        return
+    
+    board_locked = False
+    try_mode = True
+    try_move_stack = []  # Initialize empty stack
+    try_step = 0
+    try_current_index = 0
+    formula_text = "" 
+    # Record the starting index of game record when entering try mode
+    try_record_start_index = len(game_record)
+    
+    # Backup current piece positions (using current replay state as starting point)
+    try_original_blue = {k: v.copy() for k, v in replay_pieces_blue.items()}
+    try_original_red = {k: v.copy() for k, v in replay_pieces_red.items()}
+
+    # Synchronize current state to normal piece sets for unified drawing and selection logic
+    BLUE_PIECES = {k: v.copy() for k, v in replay_pieces_blue.items()}
+    RED_PIECES = {k: v.copy() for k, v in replay_pieces_red.items()}
+
+    # Clear selection when entering try mode
+    selected_piece = None
+    valid_moves = []
+
+    # Set current player based on last move in replay
+    if replay_step > 0 and replay_step <= len(replay_data.get('moves', [])):
+        last_move = replay_data['moves'][replay_step - 1]
+        try_current_player = 'red' if last_move['player'] == 'blue' else 'blue'
+    else:
+        try_current_player = 'blue'  # Default: blue moves first
+    # Synchronize current player to normal logic
+    current_player = try_current_player
+\end{lstlisting}
+
+\begin{lstlisting}[caption=Undo Try Move Function, label=lst:undo_try]
+def undo_try_move():
+    """Undo the last move in try mode"""
+    global try_mode, try_move_stack, BLUE_PIECES, RED_PIECES, try_current_player, 
+           try_step, try_current_index, current_player, game_record, move_count, 
+           try_record_start_index
+    
+    if not try_mode or not try_move_stack or try_current_index <= 0:
+        return
+    
+    # Decrement current index (stack pointer)
+    try_current_index -= 1
+    
+    # Get the move to undo
+    move_to_undo = try_move_stack[try_current_index]
+    
+    # Restore piece position
+    piece_color = move_to_undo["piece"][0]
+    piece_num = move_to_undo["piece"][1]
+    from_pos = move_to_undo["from"]
+    
+    if piece_color == 'blue':
+        BLUE_PIECES[piece_num] = list(from_pos)
+    else:
+        RED_PIECES[piece_num] = list(from_pos)
+    
+    # Switch current player (consistent with normal logic)
+    try_current_player = piece_color
+    current_player = piece_color
+
+    # Remove last record from game record (only within try mode range)
+    if len(game_record) > try_record_start_index:
+        game_record.pop()
+        if move_count > 0:
+            move_count -= 1
+\end{lstlisting}
+
+\textbf{Stack Operations}:
+\begin{itemize}
+    \item \textbf{Push}: When a move is made, it's appended to \texttt{try\_move\_stack}
+    \item \textbf{Pop}: When undoing, the index is decremented and piece positions are restored
+    \item \textbf{Index-based Navigation}: \texttt{try\_current\_index} allows navigation without modifying the stack
+\end{itemize}
+
+\subsection{Piece Movement Logic}
+
+The \texttt{move\_piece()} function handles all piece movements, including normal moves, jumps, and spans.
+
+\begin{lstlisting}[caption=Piece Movement Function, label=lst:move_piece]
+def move_piece(piece_info, target_pos, blue_pieces, red_pieces, move_type="normal", formula=None, res=None):
+    """Move piece to target position"""
+    global current_player, color_locked, level_move_count, try_mode, 
+           try_move_stack, try_step, try_current_index, try_current_player
+    global net_session, local_side, processing_remote_move
+    color, num, start_pos, _ = piece_info
+    
+    # In practice mode, check if this piece is allowed to move
+    if game_mode == 'practice' and allowed_piece and not can_move_piece(color, num):
+        return False  # Not allowed to move, return directly
+    
+    # Record position before move
+    if color == 'blue':
+        old_pos = (blue_pieces[num][0], blue_pieces[num][1])
+        blue_pieces[num][0] = target_pos[0]
+        blue_pieces[num][1] = target_pos[1]
+        # Switch current player if color not locked
+        if not color_locked:
+            current_player = 'red'  # Switch to red
+    else:
+        old_pos = (red_pieces[num][0], red_pieces[num][1])
+        red_pieces[num][0] = target_pos[0]
+        red_pieces[num][1] = target_pos[1]
+        # Switch current player if color not locked
+        if not color_locked:
+            current_player = 'blue'  # Switch to blue
+    
+    # Increment move count in practice mode
+    if game_mode == 'practice':
+        level_move_count += 1
+
+    # If in try mode and user continues from middle step, truncate future moves
+    if try_mode:
+        if try_current_index < len(try_move_stack):
+            try_move_stack = try_move_stack[:try_current_index]
+            try_step = try_current_index
+
+    # Record this move (also write to game record in try mode for undo and analysis)
+    record_move(piece_info, old_pos, target_pos, move_type, formula, res)
+
+    # In LAN mode, synchronize local move to opponent
+    if game_mode == 'lan' and net_session and not processing_remote_move:
+        try:
+            color, num, _, _ = piece_info
+            net_session.send({
+                'type': 'move',
+                'piece': {'color': color, 'num': num},
+                'from': list(old_pos),
+                'to': list(target_pos),
+                'move_type': move_type,
+                'formula': formula,
+                'res': res,
+            })
+        except Exception:
+            pass
+
+    # In try mode, push to try move stack and update step count and index
+    if try_mode:
+        try_move_stack.append({
+            "piece": (color, num),
+            "from": old_pos,
+            "to": target_pos
+        })
+        try_step = len(try_move_stack)
+        try_current_index = try_step
+        # Switch try current player for next move
+        try_current_player = 'red' if color == 'blue' else 'blue'
+    
+    # In practice mode, check level victory condition (not triggered in demo mode)
+    if game_mode == 'practice' and current_level and not demo_mode and check_level_victory():
+        complete_level()
+    
+    return True  # Move successful
+\end{lstlisting}
+
+\subsection{Game Recording System}
+
+The game recording system saves all moves to JSON format for replay functionality.
+
+\begin{lstlisting}[caption=Game Move Recording Function, label=lst:record_move]
+def record_move(
+    piece_info: Tuple[str, int, Any, Any],
+    start_pos: Tuple[int, int],
+    target_pos: Tuple[int, int],
+    move_type: str,
+    formula: Any,
+    res: Any,
+    *,
+    game_mode: str,
+    color_locked: bool,
+    god_mode: bool,
+    try_mode: bool,
+    try_current_index: int,
+    try_step: int,
+    game_record: List[dict],
+    move_count: int,
+) -> Tuple[List[dict], int]:
+    """Record a move based on current state and return updated record and move count"""
+    if game_mode == 'practice':
+        return game_record, move_count
+    if color_locked or god_mode:
+        return game_record, move_count
+    move_count += 1
+    color, piece_num, _, _ = piece_info
+    move_record = {
+        "move_number": move_count,
+        "player": color,
+        "piece_number": piece_num,
+        "start_position": {"col": start_pos[0], "row": start_pos[1]},
+        "end_position": {"col": target_pos[0], "row": target_pos[1]},
+        "move_type": move_type,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "paths": res,
+    }
+    if formula:
+        move_record["formula"] = formula
+    if try_mode:
+        move_record["context"] = "try"
+        move_record["try_step_index"] = try_current_index + 1
+        move_record["try_step_total"] = try_step + 1
+    game_record.append(move_record)
+    return game_record, move_count
+\end{lstlisting}
+
+\subsection{Level Victory Condition Checking}
+
+The level system supports multiple victory condition types, checked by a unified function.
+
+\begin{lstlisting}[caption=Level Victory Condition Check, label=lst:check_victory]
+def check_level_victory(current_level: int,
+                        levels_config: dict,
+                        BLUE_PIECES: dict,
+                        RED_PIECES: dict,
+                        calculation_result: Any,
+                        game_record: list,
+                        point_map: Optional[dict],
+                        get_numbers_func: Optional[Callable[[Tuple[int, int], Tuple[int, int], dict], list]] = None) -> bool:
+    """Check level victory condition"""
+    if not levels_config or current_level > len(levels_config['levels']):
+        return False
+
+    level_info = levels_config['levels'][current_level - 1]
+    win_condition = level_info['win_condition']
+
+    # Victory condition: move piece from original position
+    if win_condition['type'] == 'move_piece':
+        piece_info = win_condition['piece']
+        original_pos = win_condition['from']
+        pieces = BLUE_PIECES if piece_info['color'] == 'blue' else RED_PIECES
+        current_pos = pieces.get(piece_info['number'])
+        return current_pos != original_pos
+
+    # Victory condition: escape encirclement
+    elif win_condition['type'] == 'escape_encirclement':
+        piece_info = win_condition['piece']
+        pieces = BLUE_PIECES if piece_info['color'] == 'blue' else RED_PIECES
+        current_pos = pieces.get(piece_info['number'])
+        escape_area = win_condition['escape_area']
+        return current_pos not in escape_area
+
+    # Victory condition: reach position with specific calculation result
+    elif win_condition['type'] == 'position_and_calculation':
+        piece_info = win_condition['piece']
+        target_pos = win_condition['target_position']
+        target_result = win_condition['calculation_result']
+        pieces = BLUE_PIECES if piece_info['color'] == 'blue' else RED_PIECES
+        current_pos = pieces.get(piece_info['number'])
+        if current_pos != target_pos:
+            return False
+        if calculation_result is not None:
+            return calculation_result == target_result
+        else:
+            # Calculate from last move if calculation result not provided
+            if game_record and len(game_record) > 0 and get_numbers_func is not None and point_map is not None:
+                last_move = game_record[-1]
+                if (last_move['player'] == piece_info['color'] and
+                    last_move['piece_number'] == piece_info['number']):
+                    start_pos = (last_move['start_position']['col'], last_move['start_position']['row'])
+                    end_pos = (last_move['end_position']['col'], last_move['end_position']['row'])
+                    crossed_numbers = get_numbers_func(start_pos, end_pos, point_map)
+                    return sum(crossed_numbers) == target_result
+            return False
+
+    # Victory condition: reach position with equal path values (continuous span)
+    elif win_condition['type'] == 'position_and_equal_paths':
+        piece_info = win_condition['piece']
+        target_pos = win_condition['target_position']
+        pieces = BLUE_PIECES if piece_info['color'] == 'blue' else RED_PIECES
+        current_pos = pieces.get(piece_info['number'])
+        return current_pos == target_pos
+
+    # Victory condition: reach target position
+    elif win_condition['type'] == 'position':
+        piece_info = win_condition['piece']
+        target_pos = win_condition['target_position']
+        pieces = BLUE_PIECES if piece_info['color'] == 'blue' else RED_PIECES
+        current_pos = pieces.get(piece_info['number'])
+        return current_pos == target_pos
+
+    return False
+\end{lstlisting}
+
+\subsection{Path Number Collection}
+
+The \texttt{get\_numbers()} function collects all piece numbers along a path between two positions.
+
+\begin{lstlisting}[caption=Get Numbers Along Path, label=lst:get_numbers]
+def get_numbers(start, end, point_map):
+    """
+    Get piece numbers between start and end using col,row coordinates
+    Call get_line_coordinates function to read intermediate coordinate data
+    """
+    numbers = []
+    start_col, start_row = start
+    end_col, end_row = end
+    
+    # Use get_line_coordinates to get coordinates in three directions from start point
+    left_diagonal, right_diagonal, horizontal_line = get_line_coordinates(start_col, start_row, point_map)
+    
+    # Check which direction the end point is in
+    line_coords = None
+    if (end_col, end_row) in horizontal_line:
+        line_coords = horizontal_line
+    elif (end_col, end_row) in left_diagonal:
+        line_coords = left_diagonal
+    elif (end_col, end_row) in right_diagonal:
+        line_coords = right_diagonal
+    
+    if line_coords is None:
+        return numbers  # start and end are not on the same line
+    
+    # Find indices of start and end in line_coords
+    try:
+        start_idx = line_coords.index((start_col, start_row))
+        end_idx = line_coords.index((end_col, end_row))
+    except ValueError:
+        return numbers  # start or end not on line
+    
+    # Ensure start_idx < end_idx
+    if start_idx > end_idx:
+        start_idx, end_idx = end_idx, start_idx
+    
+    # Get intermediate coordinates between start and end (excluding start and end themselves)
+    middle_coords = line_coords[start_idx + 1:end_idx]
+    
+    # Check intermediate coordinates for pieces in path order
+    for coord in middle_coords:
+        # Check blue pieces
+        for piece_num, piece_pos in BLUE_PIECES.items():
+            if tuple(piece_pos) == coord:
+                numbers.append(piece_num)
+                break
+        else:
+            # Check red pieces
+            for piece_num, piece_pos in RED_PIECES.items():
+                if tuple(piece_pos) == coord:
+                    numbers.append(piece_num)
+                    break
+    
+    return numbers
+\end{lstlisting}
+
+\section{Data Structures}
+
+\subsection{Game Record Structure}
+
+The game record is stored as a JSON object with the following structure:
+
+\begin{lstlisting}[caption=Game Record JSON Structure, label=lst:game_record_structure]
+{
+    "game_info": {
+        "start_time": "2024-01-15T10:30:00",
+        "total_moves": 25
+    },
+    "moves": [
+        {
+            "move_number": 1,
+            "player": "blue",
+            "piece_number": 5,
+            "start_position": {"col": 7, "row": 11},
+            "end_position": {"col": 8, "row": 11},
+            "move_type": "move",
+            "timestamp": "2024-01-15T10:30:15",
+            "paths": [[5]]
+        },
+        {
+            "move_number": 2,
+            "player": "red",
+            "piece_number": 3,
+            "start_position": {"col": 10, "row": 15},
+            "end_position": {"col": 9, "row": 15},
+            "move_type": "span",
+            "formula": "2+1",
+            "timestamp": "2024-01-15T10:30:30",
+            "paths": [[2, 1]]
+        }
+    ]
+}
+\end{lstlisting}
+
+\subsection{Try Mode Stack Structure}
+
+The try mode stack stores move information for undo/redo functionality:
+
+\begin{lstlisting}[caption=Try Move Stack Structure, label=lst:try_stack]
+try_move_stack = [
+    {
+        "piece": ("blue", 5),
+        "from": (7, 11),
+        "to": (8, 11)
+    },
+    {
+        "piece": ("red", 3),
+        "from": (10, 15),
+        "to": (9, 15)
+    }
+]
+\end{lstlisting}
+
+\section{Summary}
+
+The code implementations demonstrate:
+
+\begin{itemize}
+    \item \textbf{Recursive Algorithms}: Efficient path-finding using DFS with backtracking, including recursive jump position expansion
+    \item \textbf{Stack Data Structure}: State management for undo/redo functionality
+    \item \textbf{Modular Design}: Separation of concerns with clear function responsibilities
+    \item \textbf{Data Persistence}: JSON-based storage for game records and configurations
+    \item \textbf{Flexible Victory Conditions}: Extensible system supporting multiple level types
+    \item \textbf{Multi-hop Path Finding}: Recursive expansion of jump positions to find all possible continuous span sequences
+\end{itemize}
+
+All code follows Python best practices with clear variable naming, comprehensive error handling, and detailed comments explaining the logic and algorithms used.
+
+\end{document}

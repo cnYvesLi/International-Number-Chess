@@ -1,0 +1,229 @@
+{
+  "1": [
+    {
+      "type": "click_piece",
+      "piece_color": "red",
+      "piece_number": 6,
+      "explanation": "Step 1: Click on red piece 6 to select it."
+    },
+    {
+      "type": "click_position",
+      "position": [7, 13],
+      "explanation": "Step 2: Click on the empty cell to the right of piece 6 to move it there."
+    }
+  ],
+  "2": [
+    {
+      "type": "click_piece",
+      "piece_color": "blue",
+      "piece_number": 0,
+      "explanation": "Step 1: Click on blue piece 0 to select it."
+    },
+    {
+      "type": "click_position",
+      "position": [7, 13],
+      "explanation": "Step 2: Jump over the red piece to escape."
+    }
+  ],
+  "3": [
+    {
+      "type": "click_piece",
+      "piece_color": "red",
+      "piece_number": 8,
+      "explanation": "Step 1: Click on red piece 8 to select it."
+    },
+    {
+      "type": "click_position",
+      "position": [10, 16],
+      "explanation": "Step 2: Click on the target position (red box) to start span calculation."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 3,
+      "explanation": "Step 3: Using these numbers to get answer of 8."
+    },
+    {
+      "type": "click_operator",
+      "operator": "+",
+      "explanation": "Step 4: Using these numbers to get answer of 8."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 2,
+      "explanation": "Step 5: Using these numbers to get answer of 8."
+    },
+    {
+      "type": "click_operator",
+      "operator": "+",
+      "explanation": "Step 6: Using these numbers to get answer of 8."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 9,
+      "explanation": "Step 7: Using these numbers to get answer of 8."
+    },
+    {
+      "type": "click_operator",
+      "operator": "-",
+      "explanation": "Step 6: Using these numbers to get answer of 8."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 6,
+      "explanation": "Step 7: Using these numbers to get answer of 8."
+    },
+    {
+      "type": "click_calc_button",
+      "explanation": "Step 8: Click on the calculate button to compute the result (2 + 3 + 9 - 4 = 8)."
+    }
+  ],
+  "4": [
+    {
+      "type": "click_piece",
+      "piece_color": "red",
+      "piece_number": 1,
+      "explanation": "Step 1: Click on red piece 1 to select it."
+    },
+    {
+      "type": "click_position",
+      "position": [9, 17],
+      "explanation": "Step 2: Click on the red box (target position) to start continuous span calculation."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 3,
+      "explanation": "Step 3: First segment - Click on number 3."
+    },
+    {
+      "type": "click_operator",
+      "operator": "+",
+      "explanation": "Step 4: First segment - Click on the addition operator (+)."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 6,
+      "explanation": "Step 5: First segment - Click on number 6."
+    },
+    {
+      "type": "click_calc_button",
+      "explanation": "Step 6: Calculate first segment: 3 + 6 = 9 (result shown in top right)."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 6,
+      "explanation": "Step 7: Second segment - Click on number 6."
+    },
+    {
+      "type": "click_operator",
+      "operator": "+",
+      "explanation": "Step 8: Second segment - Click on the addition operator (+)."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 5,
+      "explanation": "Step 9: Second segment - Click on number 5."
+    },
+    {
+      "type": "click_operator",
+      "operator": "-",
+      "explanation": "Step 10: Second segment - Click on the subtraction operator (-)."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 2,
+      "explanation": "Step 11: Second segment - Click on number 2."
+    },
+    {
+      "type": "click_calc_button",
+      "explanation": "Step 12: Calculate second segment: 6 + 5 - 2 = 9. Both segments equal 9. Calculation complete."
+    }
+  ],
+  "5": [
+    {
+      "type": "click_piece",
+      "piece_color": "blue",
+      "piece_number": 9,
+      "explanation": "Step 1: Click on blue piece 9 to select it."
+    },
+    {
+      "type": "click_position",
+      "position": [3, 7],
+      "explanation": "Step 2: Click on the target position to start span calculation."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 4,
+      "explanation": "Step 3: Click on number 4 from the spanned pieces."
+    },
+    {
+      "type": "click_operator",
+      "operator": "+",
+      "explanation": "Step 4: Click on the addition operator (+)."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 5,
+      "explanation": "Step 5: Click on number 5."
+    },
+    {
+      "type": "click_calc_button",
+      "explanation": "Step 6: Click on the '=' button to calculate. (4 + 5 = 9)"
+    }
+  ],
+  "6": [
+    {
+      "type": "click_piece",
+      "piece_color": "blue",
+      "piece_number": 0,
+      "explanation": "Step 1: Click on blue piece 0 to select it."
+    },
+    {
+      "type": "click_position",
+      "position": [4, 10],
+      "explanation": "Step 2: Click on the target position (4, 10). Two paths will appear on the right."
+    },
+    {
+      "type": "click_continuous_span_path",
+      "path_index": 0,
+      "explanation": "Step 3: Select the first path (the one with segments (3, 2) and (7, 8))."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 3,
+      "explanation": "Step 4: First segment - Click on number 3."
+    },
+    {
+      "type": "click_operator",
+      "operator": "-",
+      "explanation": "Step 5: First segment - Click on the subtraction operator (-)."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 2,
+      "explanation": "Step 6: First segment - Click on number 2."
+    },
+    {
+      "type": "click_calc_button",
+      "explanation": "Step 7: Calculate first segment: 3 - 2 = 1."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 8,
+      "explanation": "Step 8: Second segment - Click on number 8."
+    },
+    {
+      "type": "click_operator",
+      "operator": "-",
+      "explanation": "Step 9: Second segment - Click on the subtraction operator (-)."
+    },
+    {
+      "type": "click_calculation_number",
+      "number": 7,
+      "explanation": "Step 10: Second segment - Click on number 7."
+    },
+    {
+      "type": "click_calc_button",
+      "explanation": "Step 11: Calculate second segment: 8 - 7 = 1. Both segments equal 1. Move complete!"
+    }
+  ]
+}

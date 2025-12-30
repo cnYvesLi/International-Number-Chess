@@ -1,0 +1,15 @@
+{
+  "setup_info": {
+    "created_time": "2025-12-02T17:12:49.836791",
+    "type": "custom_setup",
+    "blue_pieces_count": 1,
+    "red_pieces_count": 0
+  },
+  "blue_pieces": {
+    "6": [
+      8,
+      10
+    ]
+  },
+  "red_pieces": {}
+}

@@ -15,7 +15,7 @@ pygame.init()
 
 # 修改窗口大小以适应计算版区域和上方算式区域
 
-state = "MENU" # 状态机： MENU, GAME, SPLASH, END
+state = "MENU" # 状态机： MENU, GAME, SPLASH, END, LEVEL_COMPLETE, LEVEL_FAILED
 god_mode = False  # 新增：上帝模式开关
 winner = None
 
@@ -55,6 +55,7 @@ custom_names = {}  # 存储自定义棋谱名称
 renaming_file = None  # 当前正在重命名的文件
 rename_input = ""  # 重命名输入文本
 deleting_file = None # 当前正在确认删除的文件
+confirm_exit_game = False  # 是否显示退出游戏确认对话框
 
 # 自定义摆棋相关变量
 custom_setup_pieces = {}  # 存储自定义摆棋位置 {(col, row): (color, num)}
@@ -78,11 +79,45 @@ hint_box_dragging = False  # 提示框是否正在拖动
 hint_box_offset = (0, 0)   # 拖动偏移量
 hint_box_pos = (None, None)  # 提示框位置
 hint_box_rect = None       # 提示框矩形区域
+hint_box_collapsed = False  # 提示框是否收起
+show_first_level_tip = False  # 是否显示第一关提示弹窗
+show_level3_span_tip = False  # 是否显示第三关单跨提示弹窗
+level3_tip_step = 0  # 第三关提示的步骤（0: cancel, 1: delete, 2: clear, 3: calculate）
+# 演示模式相关变量
+demo_mode = False  # 是否处于演示模式
+demo_steps = []  # 演示步骤列表（从JSON加载）
+demo_current_step = 0  # 当前演示步骤索引
+demo_explanation = ""  # 当前步骤的解释文本
+demo_auto_playing = False  # 是否正在自动播放
+demo_step_delay = 1.5  # 每步之间的延迟时间（秒）
+demo_last_step_time = 0  # 上一步执行的时间
+demo_paused = False  # 演示是否暂停
+demo_speed_levels = [1.0, 2.0, 4.0]  # 演示播放速度档位（倍率越大越快）
+demo_speed_index = 0
+demo_speed = demo_speed_levels[demo_speed_index]
+demo_virtual_mouse_pos = None  # 虚拟鼠标位置
+demo_virtual_mouse_target = None  # 虚拟鼠标目标位置
+demo_virtual_mouse_speed = 8.0  # 虚拟鼠标移动速度（像素/帧）
+demo_virtual_mouse_image = None  # 虚拟鼠标图片
+custom_cursor_image = None  # 自定义鼠标指针图片
+selected_cursor_filename = None  # 用户选择的鼠标指针文件名
+cursor_selection_mode = False  # 是否处于鼠标指针选择模式
+demo_calculation_text = ""  # 演示中的计算文本
+demo_original_blue = {}  # 演示前的蓝色棋子位置备份
+demo_original_red = {}  # 演示前的红色棋子位置备份
+demo_original_level_move_count = 0  # 演示前的关卡移动计数
+demo_original_level_start_time = None  # 演示前的关卡开始时间
+level_initial_blue = {}  # 关卡初始蓝色棋子位置（从 start_level 保存）
+level_initial_red = {}   # 关卡初始红色棋子位置（从 start_level 保存）
+demo_click_delay = 0.3  # 点击后的延迟时间（秒）
+demo_waiting_for_click = False  # 是否正在等待点击完成
 window_size = 700  # 棋盘大小
 OFFSET_X = 200     # 右侧计算版宽度
 OFFSET_Y = 100     # 上方算式区域高度 
 window = pygame.display.set_mode((window_size + OFFSET_X, window_size + OFFSET_Y))
 pygame.display.set_caption('国际数棋棋盘')
+# 隐藏系统鼠标，使用自定义鼠标
+pygame.mouse.set_visible(False)
 
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
@@ -242,6 +277,90 @@ selected_gray_point = None  # 选中的灰色点
 color_locked = False   # 颜色锁定状态，锁定后不切换玩家颜色
 continuous_span_line = -1
 
+# --- 性能优化：缓存“备选跨越点”递归计算结果 ---
+# 说明：紫色点（potential_jumps2）的计算会触发递归 + 路径校验，若在 draw_board 每帧重复执行会非常耗时。
+# 这里用 board_version（棋盘变更版本号）+ 当前选中棋子作为 cache key，只在“棋盘变化/更换选中棋子”时重新计算。
+board_version = 0
+_jump_cache = {
+    "key": None,  # (board_version, color, num, col, row)
+    "potential_jumps": [],
+    "potential_jumps2": [],
+}
+
+
+def mark_board_changed():
+    """棋盘发生变化时调用：递增版本号并清空跳跃缓存。"""
+    global board_version
+    board_version += 1
+    _jump_cache["key"] = None
+
+
+def _compute_jump_candidates_for_selected(point_map, all_points):
+    """为当前 selected_piece 计算潜在跨越点（灰/紫），仅在 cache miss 时调用。"""
+    # selected_piece: (color, num, (col,row), (x,y))
+    if not selected_piece:
+        return [], []
+
+    # 1) 灰点：一步/两步可达的跨越候选（轻量）
+    pot1 = get_potential_jump_positions(selected_piece[2], point_map, BLUE_PIECES, RED_PIECES, all_points, 2)
+
+    # 2) 紫点：递归扩展的连跳候选（重）
+    # 注意：不要依赖全局 valid_moves（可能过期）；这里用当前位置重新算一次，代价很小。
+    valid_moves_local = get_valid_moves(selected_piece[2], point_map, BLUE_PIECES, RED_PIECES, all_points)
+    initial_moves = []
+    res = []
+    if valid_moves_local:
+        piece_x, piece_y = selected_piece[3]
+        for pos_x, pos_y, _, direction in valid_moves_local:
+            if (pos_x - piece_x) ** 2 + (pos_y - piece_y) ** 2 > GRID ** 2 * 1.5:
+                col, row = xy_to_pos(pos_x, pos_y)
+                initial_moves.append((col, row, direction))
+            col, row = xy_to_pos(pos_x, pos_y)
+            res.append((col, row, direction))
+
+    initial_moves.extend(get_potential_jump_positions(selected_piece[2], point_map, BLUE_PIECES, RED_PIECES, all_points, 1))
+    res.extend(pot1)
+
+    pot2 = get_potential_jump_recursion(point_map, BLUE_PIECES, RED_PIECES, all_points, res, initial_moves, [])
+    if pot2:
+        # 过滤：必须存在从起点到该点的合法路径（避免无意义紫点）
+        start = (selected_piece[2][0], selected_piece[2][1], (2, 2))
+        for i in range(len(pot2) - 1, -1, -1):
+            col, row, _ = pot2[i]
+            temp_paths = get_paths(start, (col, row), point_map, BLUE_PIECES, RED_PIECES, all_points, [], [])
+            if not temp_paths:
+                pot2.pop(i)
+                continue
+
+            # 进一步过滤：
+            # 紫点应当代表“需要连跨/多段处理”的候选（多路径 或 总跨越数字>=2）。
+            # 对于“只有一条路径且路径上只包含一个数字”的点（你提到的情况），不要显示为紫点。
+            if len(temp_paths) == 1:
+                total_numbers = 0
+                for node in temp_paths[0]:
+                    # node 形如 [n1, n2, ...]，表示该段跨越到的数字
+                    if isinstance(node, list):
+                        total_numbers += len(node)
+                if total_numbers <= 1:
+                    pot2.pop(i)
+
+    return pot1, pot2
+
+
+def get_cached_jump_candidates(point_map, all_points):
+    """返回 (potential_jumps, potential_jumps2)，带缓存。"""
+    if not selected_piece:
+        return [], []
+
+    key = (board_version, selected_piece[0], selected_piece[1], selected_piece[2][0], selected_piece[2][1])
+    if _jump_cache["key"] != key:
+        pot1, pot2 = _compute_jump_candidates_for_selected(point_map, all_points)
+        _jump_cache["key"] = key
+        _jump_cache["potential_jumps"] = pot1
+        _jump_cache["potential_jumps2"] = pot2
+
+    return _jump_cache["potential_jumps"], _jump_cache["potential_jumps2"]
+
 def set_default_positions():
     global BLUE_PIECES, RED_PIECES, current_player
     BLUE_PIECES = {
@@ -269,6 +388,7 @@ def set_default_positions():
         9: [1, 11]
     }
     current_player = 'blue'
+    mark_board_changed()
 
 # 记谱功能相关变量
 game_record = []  # 存储游戏记录
@@ -304,11 +424,15 @@ def reset_practice_progress():
 
 def start_level(level_id):
     """开始指定关卡（委托到services.practice）"""
-    global current_level, level_start_time, level_move_count, allowed_piece, BLUE_PIECES, RED_PIECES, practice_progress
+    global current_level, level_start_time, level_move_count, allowed_piece, BLUE_PIECES, RED_PIECES, practice_progress, show_first_level_tip
+    global level_initial_blue, level_initial_red
     success, blue_p, red_p, allowed, prog, start_t, move_cnt, cur_lvl = practice_service.start_level(
         level_id, levels_config, practice_progress
     )
     if success:
+        # 保存关卡初始状态（用于 demo 停止后恢复）
+        level_initial_blue = {k: [v[0], v[1]] for k, v in blue_p.items()}
+        level_initial_red = {k: [v[0], v[1]] for k, v in red_p.items()}
         BLUE_PIECES = blue_p
         RED_PIECES = red_p
         allowed_piece = allowed
@@ -316,6 +440,10 @@ def start_level(level_id):
         level_start_time = start_t
         level_move_count = move_cnt
         current_level = cur_lvl
+        # 如果是第一关，显示提示弹窗
+        if level_id == 1:
+            show_first_level_tip = True
+        mark_board_changed()
         return True
     return False
 
@@ -332,7 +460,653 @@ def check_level_victory():
         game_record,
         pm,
         get_numbers,
+        level_move_count,  # 传入当前关卡步数
     )
+
+
+def load_demo_steps(level_id):
+    """从JSON文件加载指定关卡的演示步骤"""
+    try:
+        with open('demo_steps.json', 'r', encoding='utf-8') as f:
+            demo_data = json.load(f)
+        return demo_data.get(str(level_id), [])
+    except FileNotFoundError:
+        print(f"Demo steps file not found for level {level_id}")
+        return []
+    except Exception as e:
+        print(f"Error loading demo steps: {e}")
+        return []
+
+
+def start_demo():
+    """启动演示模式"""
+    global demo_mode, demo_steps, demo_current_step, demo_explanation, demo_auto_playing, demo_last_step_time, demo_paused
+    global demo_speed_index, demo_speed
+    global selected_piece, valid_moves, board_locked, demo_virtual_mouse_pos, demo_virtual_mouse_target, demo_calculation_text, demo_virtual_mouse_image
+    global demo_original_blue, demo_original_red, demo_original_level_move_count, demo_original_level_start_time, level_move_count, level_start_time
+    
+    if not current_level:
+        return
+    
+    # 加载虚拟鼠标图片
+    if demo_virtual_mouse_image is None:
+        try:
+            demo_virtual_mouse_image = pygame.image.load("custom.png")
+            # 如果图片太大，可以缩放
+            if demo_virtual_mouse_image.get_width() > 50 or demo_virtual_mouse_image.get_height() > 50:
+                scale = min(50 / demo_virtual_mouse_image.get_width(), 50 / demo_virtual_mouse_image.get_height())
+                new_width = int(demo_virtual_mouse_image.get_width() * scale)
+                new_height = int(demo_virtual_mouse_image.get_height() * scale)
+                demo_virtual_mouse_image = pygame.transform.scale(demo_virtual_mouse_image, (new_width, new_height))
+        except:
+            demo_virtual_mouse_image = None  # 如果加载失败，使用默认绘制
+    
+    # 保存当前状态
+    demo_original_blue = {k: [v[0], v[1]] for k, v in BLUE_PIECES.items()}
+    demo_original_red = {k: [v[0], v[1]] for k, v in RED_PIECES.items()}
+    demo_original_level_move_count = level_move_count
+    demo_original_level_start_time = level_start_time
+    
+    # 从JSON文件加载演示步骤
+    demo_steps = load_demo_steps(current_level)
+    if not demo_steps:
+        return
+    
+    demo_mode = True
+    demo_current_step = 0
+    demo_auto_playing = True
+    demo_paused = False
+    demo_speed_index = 0
+    demo_speed = demo_speed_levels[demo_speed_index]
+    demo_last_step_time = time.time()
+    demo_virtual_mouse_pos = None
+    demo_virtual_mouse_target = None
+    demo_calculation_text = ""
+    demo_waiting_for_click = False
+    selected_piece = None
+    valid_moves = []
+    board_locked = True  # 锁定棋盘，防止用户操作
+
+
+def stop_demo():
+    """停止演示模式并恢复状态"""
+    global demo_mode, demo_steps, demo_current_step, demo_explanation, demo_auto_playing, demo_paused
+    global demo_speed_index, demo_speed
+    global board_locked, selected_piece, valid_moves, demo_virtual_mouse_pos, demo_virtual_mouse_target, demo_calculation_text
+    global demo_original_blue, demo_original_red, demo_original_level_move_count, demo_original_level_start_time, BLUE_PIECES, RED_PIECES, level_move_count, level_start_time
+    global level_initial_blue, level_initial_red, current_level
+    global calculation_result, formula_text, selected_gray_point, paths, number_res, formula_res, expected_result, continuous_span, selected_numbers, operation, demo_waiting_for_click
+    
+    # 恢复状态：优先使用关卡初始状态（如果存在），否则使用 demo 开始前的状态
+    if current_level and level_initial_blue or level_initial_red:
+        # 恢复到关卡初始状态（这是正确的行为）
+        BLUE_PIECES = {k: [v[0], v[1]] for k, v in level_initial_blue.items()}
+        RED_PIECES = {k: [v[0], v[1]] for k, v in level_initial_red.items()}
+        # 重置关卡移动计数和开始时间（重新开始关卡）
+        level_move_count = 0
+        level_start_time = time.time()
+        mark_board_changed()
+    
+    # 清理状态
+    demo_mode = False
+    demo_steps = []
+    demo_current_step = 0
+    demo_explanation = ""
+    demo_auto_playing = False
+    demo_paused = False
+    demo_speed_index = 0
+    demo_speed = demo_speed_levels[demo_speed_index]
+    board_locked = False
+    selected_piece = None
+    valid_moves = []
+    demo_virtual_mouse_pos = None
+    demo_virtual_mouse_target = None
+    demo_calculation_text = ""
+    calculation_result = None
+    formula_text = ""
+    selected_gray_point = None
+    paths = []  # 清空paths
+    number_res = []
+    formula_res = []
+    expected_result = None
+    continuous_span = False
+    selected_numbers = []  # 清空selected_numbers
+    operation = None  # 清空operation
+    demo_waiting_for_click = False  # 重置等待点击状态
+
+
+def execute_demo_step():
+    """执行当前演示步骤（使用虚拟鼠标模拟点击）"""
+    global demo_current_step, demo_explanation, demo_last_step_time, selected_piece, valid_moves, BLUE_PIECES, RED_PIECES, calculation_result, demo_virtual_mouse_pos, demo_virtual_mouse_target, demo_calculation_text, formula_text, paths, number_res, formula_res, expected_result, continuous_span, board_locked, selected_gray_point, demo_waiting_for_click, selected_numbers, operation
+    
+    if not demo_mode or demo_current_step >= len(demo_steps):
+        stop_demo()
+        return
+    
+    # 如果正在等待点击完成，检查虚拟鼠标是否到达目标
+    if demo_waiting_for_click:
+        if demo_virtual_mouse_target is None:
+            # 虚拟鼠标已到达，执行点击
+            perform_demo_click()
+            demo_waiting_for_click = False
+            demo_virtual_mouse_target = None  # 确保清除目标
+            demo_last_step_time = time.time()
+        return
+    
+    # 获取point_map
+    all_points = []
+    point_map = {}
+    for col_index, [num, offset] in enumerate(POINTS):
+        y = BEGIN_Y + col_index * GRID * math.sqrt(3) / 2
+        for i in range(num):
+            raw_index = offset + i * 2
+            x = BEGIN_X + raw_index * GRID * 0.5
+            point_map[(col_index, raw_index)] = (x, y)
+            all_points.append([x, y, col_index, i])
+    
+    step = demo_steps[demo_current_step]
+    step_type = step.get("type")
+    demo_explanation = step.get("explanation", "")
+    
+    # 根据步骤类型设置虚拟鼠标目标位置
+    if step_type == "click_piece":
+        piece_color = step.get("piece_color")
+        piece_number = step.get("piece_number")
+        pieces = BLUE_PIECES if piece_color == "blue" else RED_PIECES
+        if piece_number in pieces:
+            pos = (pieces[piece_number][0], pieces[piece_number][1])
+            if pos in point_map:
+                x, y = point_map[pos]
+                if demo_virtual_mouse_pos is None:
+                    demo_virtual_mouse_pos = (window_size // 2, window_size // 2)  # 初始位置
+                demo_virtual_mouse_target = (x, y)
+                demo_waiting_for_click = True
+                
+    elif step_type == "click_position":
+        position = step.get("position")
+        if position and tuple(position) in point_map:
+            # 第一关和第二关直接执行移动，不需要等待虚拟鼠标
+            if current_level in [1, 2]:
+                # 直接执行点击，不设置虚拟鼠标目标
+                demo_waiting_for_click = True
+                demo_virtual_mouse_target = None  # 立即触发点击
+            else:
+                x, y = point_map[tuple(position)]
+                demo_virtual_mouse_target = (x, y)
+                demo_waiting_for_click = True
+            
+    elif step_type == "click_calculation_number":
+        number = step.get("number")
+        
+        # 如果是连跨模式，从continuous_span_area中查找数字按钮位置
+        if continuous_span and paths and len(paths) > 0 and len(paths[0]) > 0:
+            # 在paths[0]中查找数字所在的段和索引
+            width = 35  # 与draw_calculation_area中的width保持一致
+            number_width = 30
+            number_height = 30
+            button_x_base = CALC_AREA_X + 10
+            number_y_pos = CALC_AREA_Y + 200  # 与draw_calculation_area中的number_y_pos保持一致
+            
+            # 遍历paths[0]找到数字（与draw_calculation_area中的绘制逻辑一致）
+            found = False
+            button_y = number_y_pos  # 初始位置
+            for idx_x, group in enumerate(paths[0]):
+                button_y += 20  # 路径标题偏移
+                button_y += width  # 每一段的偏移
+                if number in group:
+                    idx_y = group.index(number)
+                    # 计算按钮位置（与draw_calculation_area中的位置保持一致）
+                    # button_rect = pygame.Rect(button_x + (t + 0.5) * width, button_y - width, number_width, number_height)
+                    button_x = button_x_base + (idx_y + 0.5) * width
+                    button_y_rect = button_y - width
+                    demo_virtual_mouse_target = (button_x + number_width // 2, button_y_rect + number_height // 2)
+                    demo_waiting_for_click = True
+                    found = True
+                    break
+                button_y += width * 1.5  # 段之间的间距
+            if found:
+                return
+        else:
+            # 单跨模式，从selected_numbers中查找
+            number_width = 30
+            number_height = 30
+            number_margin = 5
+            number_y_pos = CALC_AREA_Y + 200
+            
+            # 找到数字在selected_numbers中的索引
+            if number in selected_numbers:
+                num_index = selected_numbers.index(number)
+                if num_index <= 4:
+                    button_x = CALC_AREA_X + 10 + num_index * (number_width + number_margin)
+                    button_y = number_y_pos
+                else:
+                    button_x = CALC_AREA_X + 10 + (num_index - 5) * (number_width + number_margin)
+                    button_y = number_y_pos + 40
+                demo_virtual_mouse_target = (button_x + number_width // 2, button_y + number_height // 2)
+                demo_waiting_for_click = True
+            
+    elif step_type == "click_operator":
+        op = step.get("operator")
+        # 计算运算符按钮的位置（与draw_calculation_area中的位置保持一致）
+        button_width = 40
+        button_height = 40
+        button_margin = 10
+        y_pos = CALC_AREA_Y + 50
+        operations = ["+", "-", "×", "÷", "(", ")"]
+        if op in operations:
+            op_index = operations.index(op)
+            if op_index <= 3:
+                # 前4个运算符在第一行
+                button_x = CALC_AREA_X + 10 + op_index * (button_width + button_margin)
+                demo_virtual_mouse_target = (button_x + button_width // 2, y_pos + button_height // 2)
+            else:
+                # 后2个运算符在第二行（y_pos + 60）
+                button_x = CALC_AREA_X + 10 + (op_index - 3) * (button_width + button_margin)
+                demo_virtual_mouse_target = (button_x + button_width // 2, y_pos + 60 + button_height // 2)
+            demo_waiting_for_click = True
+    
+    elif step_type == "click_continuous_span_path":
+        # 计算路径选择按钮的位置（与draw_calculation_area中的位置保持一致）
+        path_index = step.get("path_index", 0)
+        if continuous_span and paths and len(paths) > 1 and path_index < len(paths):
+            button_x = CALC_AREA_X + 10
+            number_y_pos = CALC_AREA_Y + 200  # 与draw_calculation_area中的number_y_pos保持一致
+            width = 35
+            button_y = number_y_pos
+            
+            # 计算目标路径按钮的位置（遍历到目标路径之前的所有路径）
+            # 注意：绘制逻辑是：先绘制路径按钮，然后 button_y += 20，然后绘制段，最后 button_y += width * 1.5
+            for idx in range(path_index):
+                if idx < len(paths):
+                    # 路径按钮本身的高度
+                    button_y += width * (len(paths[idx]) + 1)
+                    # 路径标题偏移
+                    button_y += 20
+                    # 路径之间的间距
+                    button_y += width * 1.5
+            
+            # 路径按钮的中心位置（路径按钮的高度是 width * (len(path) + 1)）
+            paths_rect_height = width * (len(paths[path_index]) + 1)
+            demo_virtual_mouse_target = (button_x + 90, button_y + paths_rect_height // 2)
+            demo_waiting_for_click = True
+                
+    elif step_type == "click_calc_button":
+        # 计算按钮的位置（实际位置在算式区域右侧：660, 15, 120, 70）
+        calc_button_x = 660
+        calc_button_y = 15
+        calc_button_width = 120
+        calc_button_height = 70
+        demo_virtual_mouse_target = (calc_button_x + calc_button_width // 2, calc_button_y + calc_button_height // 2)
+        demo_waiting_for_click = True
+    
+    # 如果设置了目标，更新虚拟鼠标位置
+    if demo_virtual_mouse_target and demo_virtual_mouse_pos is None:
+        demo_virtual_mouse_pos = (window_size // 2, window_size // 2)
+
+
+def perform_demo_click():
+    """执行虚拟鼠标点击操作"""
+    global demo_current_step, selected_piece, valid_moves, BLUE_PIECES, RED_PIECES, calculation_result, formula_text, paths, number_res, formula_res, expected_result, continuous_span, board_locked, selected_gray_point, selected_numbers, operation, demo_calculation_text
+    
+    if demo_current_step >= len(demo_steps):
+        return
+    
+    step = demo_steps[demo_current_step]
+    step_type = step.get("type")
+    
+    # 获取point_map
+    all_points = []
+    point_map = {}
+    for col_index, [num, offset] in enumerate(POINTS):
+        y = BEGIN_Y + col_index * GRID * math.sqrt(3) / 2
+        for i in range(num):
+            raw_index = offset + i * 2
+            x = BEGIN_X + raw_index * GRID * 0.5
+            point_map[(col_index, raw_index)] = (x, y)
+            all_points.append([x, y, col_index, i])
+    
+    if step_type == "click_piece":
+        piece_color = step.get("piece_color")
+        piece_number = step.get("piece_number")
+        pieces = BLUE_PIECES if piece_color == "blue" else RED_PIECES
+        if piece_number in pieces:
+            pos = (pieces[piece_number][0], pieces[piece_number][1])
+            if pos in point_map:
+                x, y = point_map[pos]
+                piece_info = (piece_color, piece_number, pos, (x, y))
+                selected_piece = piece_info
+                # 获取有效移动位置
+                valid_moves = get_valid_moves(pos, point_map, BLUE_PIECES, RED_PIECES, all_points)
+                
+    elif step_type == "click_position":
+        position = step.get("position")
+        if position and selected_piece:
+            target_pos = tuple(position)
+            if target_pos in point_map:
+                # 第一关和第二关是普通移动，不需要计算，直接移动
+                if current_level in [1, 2]:
+                    move_type = "move"  # 普通移动
+                    move_piece(selected_piece, target_pos, BLUE_PIECES, RED_PIECES, move_type)
+                    selected_piece = None
+                    valid_moves = []
+                else:
+                    # 第三关及以后需要检查是否是跨步移动（通过检查路径）
+                    paths = get_paths((selected_piece[2][0], selected_piece[2][1], None), target_pos, point_map, BLUE_PIECES, RED_PIECES, all_points)
+                    if paths and len(paths) > 0:
+                        # 检查路径中是否有数字（跨步移动会有数字）
+                        has_numbers = False
+                        for path in paths:
+                            for node in path:
+                                if len(node) > 0:
+                                    has_numbers = True
+                                    break
+                            if has_numbers:
+                                break
+                        
+                        if has_numbers:
+                            # 是跨步移动，设置board_locked和selected_gray_point
+                            board_locked = True
+                            selected_gray_point = target_pos
+                            # 设置continuous_span（根据关卡判断）
+                            if current_level == 4 or current_level == 6:
+                                continuous_span = True
+                                expected_result = None
+                                # 连跨模式：paths[0]已经是分段格式，不需要设置selected_numbers
+                                number_res = []  # 清空之前的数字结果
+                                selected_numbers = []  # 连跨模式下不使用selected_numbers
+                            else:
+                                continuous_span = False
+                                # 单跨模式：获取路径中的数字并设置selected_numbers
+                                path = paths[0]
+                                selected_numbers = []  # 清空之前的选中数字
+                                number_res = []  # 清空之前的数字结果
+                                for node in path:
+                                    if len(node) > 0:
+                                        # 将路径中的数字添加到selected_numbers
+                                        for num in node:
+                                            if isinstance(num, (int, float)):
+                                                selected_numbers.append(int(num))
+                                        number_res.append(node)
+                        else:
+                            # 路径中没有数字，是普通移动或跳跃
+                            move_type = "move"  # 默认移动类型
+                            move_piece(selected_piece, target_pos, BLUE_PIECES, RED_PIECES, move_type)
+                            selected_piece = None
+                            valid_moves = []
+                    else:
+                        # 普通移动或跳跃
+                        move_type = "move"  # 默认移动类型，可以根据需要调整
+                        move_piece(selected_piece, target_pos, BLUE_PIECES, RED_PIECES, move_type)
+                        selected_piece = None
+                        valid_moves = []
+                
+    elif step_type == "click_calculation_number":
+        number = step.get("number")
+        
+        # 如果是连跨模式，从paths[0]中获取数字（与正常play逻辑一致）
+        if continuous_span and paths and len(paths) > 0 and len(paths[0]) > 0:
+            # 在paths[0]中查找数字所在的段和索引
+            found = False
+            for idx_x, group in enumerate(paths[0]):
+                if number in group:
+                    idx_y = group.index(number)
+                    val = paths[0][idx_x][idx_y]
+                    # 模拟点击continuous_span_area中的数字按钮（与正常play逻辑一致）
+                    is_valid, error_msg = is_valid_formula(formula_text + str(val))
+                    if is_valid:
+                        if len(number_res) == 0:  # 若缓存为空，新增数组
+                            number_res.append([idx_x + 1])
+                        elif number_res[-1][0] == -114514:  # 当行没有数字时，缓存新增一行
+                            number_res.append([idx_x + 1])
+                        elif number_res[-1][0] < 0:  # 小于0时，无法进行数组选择
+                            break
+                        formula_text += str(val)
+                        paths[0][idx_x].pop(idx_y)
+                        number_res[-1].append(val)  # 将计算数字加入缓存
+                        if len(paths[0][idx_x]) == 0:  # 当行没有数字时，索引改为负
+                            paths[0].pop(idx_x)
+                            number_res[-1][0] = -abs(number_res[-1][0])
+                        # 检查是否只剩一组数据
+                        if len(paths[0]) == 1 and len(paths[0][0]) == 0:
+                            # 改为灰色点判定方式
+                            continuous_span = False
+                            expected_result = selected_piece[1]  # 预期结果改为棋子点数
+                    found = True
+                    break
+            # 注意：不要在这里return，让代码继续执行到函数末尾，以便执行demo_current_step += 1
+        else:
+            # 单跨模式，从selected_numbers中获取
+            if number in selected_numbers:
+                num_index = selected_numbers.index(number)
+                # 模拟点击数字按钮
+                is_valid, error_msg = is_valid_formula(formula_text + str(number))
+                if is_valid:
+                    formula_text += str(number)
+                    number_res.append(number)
+                    selected_numbers.pop(num_index)
+                
+    elif step_type == "click_operator":
+        op = step.get("operator")
+        # 模拟点击运算符按钮
+        is_valid, error_msg = is_valid_formula(formula_text + op)
+        if is_valid:
+            formula_text += op
+            operation = op
+        # 无论是否有效，都继续下一步（避免卡住）
+    
+    elif step_type == "click_continuous_span_path":
+        # 模拟点击路径选择按钮（当有多条路径时）
+        path_index = step.get("path_index", 0)
+        if continuous_span and paths and len(paths) > 1:
+            # 选择指定路径，删除其他路径（模拟点击路径按钮的效果）
+            if 0 <= path_index < len(paths):
+                selected_path = paths[path_index]
+                paths = [selected_path]
+                # 如果选择后只剩一条路径且只有一段，转换为单跨模式
+                if len(paths) == 1 and len(paths[0]) == 1:
+                    continuous_span = False
+                    expected_result = selected_piece[1] if selected_piece else None
+                    selected_numbers = paths[0][0] if paths[0] else []
+                    paths = []
+    
+    elif step_type == "click_calc_button":
+        # 模拟点击计算按钮
+        if formula_text:
+            try:
+                calc_formula = formula_text.replace('×', '*').replace('÷', '/')
+                calculation_result = eval(calc_formula)
+                demo_calculation_text = f"{formula_text} = {calculation_result}"
+            except:
+                calculation_result = "ERROR"
+        else:
+            calculate_result()
+        
+        # 如果已选中棋子和目标位置，且计算结果正确，执行移动
+        if board_locked and selected_piece and selected_gray_point and calculation_result != "ERROR":
+            if continuous_span:
+                if -114514 < number_res[-1][0] < 0 and expected_result is None:
+                    expected_result = int(calculation_result)
+                    formula_res.append(formula_text)
+                    formula_text = ""
+                    number_res[-1][0] = -114514
+                elif -114514 < number_res[-1][0] < 0 and expected_result == calculation_result:
+                    if len(paths[0]) == 0:
+                        formula_res.append(formula_text)
+                        # 执行移动
+                        target_pos = selected_gray_point
+                        move_piece(selected_piece, target_pos, BLUE_PIECES, RED_PIECES, "span", None, calculation_result)
+                        selected_piece = None
+                        selected_gray_point = None
+                    else:
+                        formula_res.append(formula_text)
+                        formula_text = ""
+                        number_res[-1][0] = -114514
+            elif not continuous_span:
+                if selected_piece[1] == calculation_result:
+                    target_pos = selected_gray_point
+                    move_piece(selected_piece, target_pos, BLUE_PIECES, RED_PIECES, "span", None, calculation_result)
+                    selected_piece = None
+                    selected_gray_point = None
+    
+    # 移动到下一步
+    demo_current_step += 1
+    if demo_current_step >= len(demo_steps):
+        # 所有步骤完成，延迟后停止演示
+        demo_auto_playing = False
+        # 清空paths和其他状态
+        paths = []
+        number_res = []
+        formula_res = []
+        selected_numbers = []
+        operation = None
+
+
+def update_demo_virtual_mouse():
+    """更新虚拟鼠标位置"""
+    global demo_virtual_mouse_pos, demo_virtual_mouse_target, demo_speed
+    
+    if demo_virtual_mouse_pos is None or demo_virtual_mouse_target is None:
+        return
+    
+    # 计算距离
+    dx = demo_virtual_mouse_target[0] - demo_virtual_mouse_pos[0]
+    dy = demo_virtual_mouse_target[1] - demo_virtual_mouse_pos[1]
+    distance = math.sqrt(dx * dx + dy * dy)
+    
+    # 速度随演示倍速提升
+    speed = demo_virtual_mouse_speed * (demo_speed if demo_speed else 1.0)
+    # 如果距离很小，认为已到达
+    if distance < speed:
+        demo_virtual_mouse_pos = demo_virtual_mouse_target
+        demo_virtual_mouse_target = None
+    else:
+        # 移动虚拟鼠标
+        move_x = (dx / distance) * speed
+        move_y = (dy / distance) * speed
+        demo_virtual_mouse_pos = (demo_virtual_mouse_pos[0] + move_x, demo_virtual_mouse_pos[1] + move_y)
+
+
+def draw_demo_virtual_mouse(screen):
+    """绘制虚拟鼠标（使用自定义图片）"""
+    global demo_virtual_mouse_image
+    
+    if demo_virtual_mouse_pos is None:
+        return
+    
+    x, y = demo_virtual_mouse_pos
+    
+    # 如果图片已加载，使用图片
+    if demo_virtual_mouse_image is not None:
+        # 获取图片尺寸
+        img_width = demo_virtual_mouse_image.get_width()
+        img_height = demo_virtual_mouse_image.get_height()
+        # 绘制图片（以鼠标位置为中心）
+        screen.blit(demo_virtual_mouse_image, (x - img_width // 2, y - img_height // 2))
+        
+        # 绘制鼠标点击效果（如果正在等待点击）
+        if demo_waiting_for_click and demo_virtual_mouse_target is None:
+            # 绘制点击动画（圆圈扩散效果）
+            click_radius = 15
+            for i in range(3):
+                alpha = 200 - i * 60
+                click_surface = pygame.Surface((click_radius * 2, click_radius * 2), pygame.SRCALPHA)
+                pygame.draw.circle(click_surface, (255, 0, 0, alpha), (click_radius, click_radius), click_radius - i * 3, 2)
+                screen.blit(click_surface, (x - click_radius, y - click_radius))
+    else:
+        # 如果图片未加载，使用默认绘制（备用方案）
+        mouse_size = 25
+        # 绘制鼠标形状（箭头形状）
+        points = [
+            (x, y),
+            (x + mouse_size, y),
+            (x + mouse_size * 0.75, y + mouse_size * 0.4),
+            (x + mouse_size * 0.5, y + mouse_size * 0.6),
+            (x, y + mouse_size * 0.4)
+        ]
+        # 绘制阴影效果
+        shadow_points = [(p[0] + 2, p[1] + 2) for p in points]
+        pygame.draw.polygon(screen, (100, 100, 100), shadow_points)
+        # 绘制鼠标主体（红色，更明显）
+        pygame.draw.polygon(screen, RED, points)
+        pygame.draw.polygon(screen, BLACK, points, 2)
+        
+        # 绘制鼠标点击效果（如果正在等待点击）
+        if demo_waiting_for_click and demo_virtual_mouse_target is None:
+            # 绘制点击动画（圆圈扩散效果）
+            click_radius = 15
+            for i in range(3):
+                alpha = 200 - i * 60
+                click_surface = pygame.Surface((click_radius * 2, click_radius * 2), pygame.SRCALPHA)
+                pygame.draw.circle(click_surface, (255, 0, 0, alpha), (click_radius, click_radius), click_radius - i * 3, 2)
+                screen.blit(click_surface, (x - click_radius + mouse_size // 2, y - click_radius + mouse_size // 2))
+
+
+def draw_demo_explanation(screen):
+    """绘制演示解释文本"""
+    global demo_mode, demo_explanation, demo_calculation_text
+    
+    if not demo_mode or not demo_explanation:
+        return
+    
+    # 创建解释文本窗口（位置在右下角demo按钮的右边）
+    explanation_width = 450  # 增加宽度以适应更大的字体
+    # 删除标题，直接显示解释文本，节省空间
+    explanation_height = 120
+    if demo_calculation_text:
+        explanation_height = 180  # 如果有计算文本，增加高度
+    # Demo按钮位置：window_size - 150, window_size + OFFSET_Y - 40, 140, 30
+    # 提示框放在Demo按钮右边
+    explanation_x = window_size - 150 - explanation_width - 10  # Demo按钮左边，留10像素间距
+    explanation_y = window_size + OFFSET_Y - explanation_height  # 与Demo按钮底部对齐
+    
+    # 半透明背景
+    explanation_surface = pygame.Surface((explanation_width, explanation_height), pygame.SRCALPHA)
+    explanation_rect = pygame.Rect(0, 0, explanation_width, explanation_height)
+    pygame.draw.rect(explanation_surface, (255, 255, 200, 240), explanation_rect)
+    pygame.draw.rect(explanation_surface, (0, 0, 0, 240), explanation_rect, 2)
+    
+    # 删除标题，直接绘制解释文本（自动换行）- 缩小字体和行间距
+    desc_font = pygame.font.Font(None, 40)  # 保持40号字体
+    text_width = explanation_width - 20
+    words = demo_explanation.split(' ')
+    lines = []
+    current_line = ""
+    
+    for word in words:
+        test_line = current_line + (" " if current_line else "") + word
+        if desc_font.size(test_line)[0] <= text_width:
+            current_line = test_line
+        else:
+            if current_line:
+                lines.append(current_line)
+            current_line = word
+    
+    if current_line:
+        lines.append(current_line)
+    
+    # 绘制文本行 - 调整行高和起始位置（删除标题后从顶部开始）
+    start_y = 20  # 从20开始，因为删除了标题
+    line_height = 38  # 从45继续减小到38，进一步减小行间距
+    for i, line in enumerate(lines):
+        if i >= 4:  # 删除标题后可以显示更多行（从3行增加到4行）
+            break
+        desc_text = desc_font.render(line, True, BLACK)
+        desc_rect = desc_text.get_rect(center=(explanation_width // 2, start_y + i * line_height))
+        explanation_surface.blit(desc_text, desc_rect)
+    
+    # 如果有计算文本，绘制计算过程 - 增大字体
+    if demo_calculation_text:
+        calc_start_y = start_y + min(len(lines), 4) * line_height + 10
+        calc_lines = demo_calculation_text.split('\n')
+        calc_font = pygame.font.Font(None, 44)  # 从20增加到44（超过2倍）
+        for i, calc_line in enumerate(calc_lines):
+            if i >= 3:  # 最多显示3行计算
+                break
+            calc_text = calc_font.render(calc_line, True, BLUE)
+            calc_rect = calc_text.get_rect(center=(explanation_width // 2, calc_start_y + i * 42))  # 进一步减小计算文本行间距
+            explanation_surface.blit(calc_text, calc_rect)
+    
+    screen.blit(explanation_surface, (explanation_x, explanation_y))
 
 
 def complete_level():
@@ -381,6 +1155,8 @@ def init_game_record():
     """初始化游戏记录（委托到services.game）"""
     global game_record, game_start_time, move_count
     game_record, game_start_time, move_count = game_service.init_game_record(game_mode)
+    # 新局/切换模式时避免复用旧缓存
+    _jump_cache["key"] = None
 
 
 def record_move(piece_info, start_pos, target_pos, move_type, formula=None, res=None):
@@ -642,6 +1418,7 @@ def update_replay_positions():
     if game_mode == 'replay' and not try_mode:
         BLUE_PIECES = {k: v.copy() for k, v in replay_pieces_blue.items()}
         RED_PIECES = {k: v.copy() for k, v in replay_pieces_red.items()}
+        mark_board_changed()
 
 
 def enter_try_mode():
@@ -668,6 +1445,7 @@ def enter_try_mode():
     # 将当前局面同步到正常棋子集合，统一绘制与选择逻辑
     BLUE_PIECES = {k: v.copy() for k, v in replay_pieces_blue.items()}
     RED_PIECES = {k: v.copy() for k, v in replay_pieces_red.items()}
+    mark_board_changed()
 
     # 进入试下后取消当前选中并清空可走点
     selected_piece = None
@@ -701,6 +1479,7 @@ def exit_try_mode():
     # 同步到正常棋子集合，恢复到开启试下之前的显示与交互状态
     BLUE_PIECES = {k: v.copy() for k, v in replay_pieces_blue.items()}
     RED_PIECES = {k: v.copy() for k, v in replay_pieces_red.items()}
+    mark_board_changed()
     
     # 重置试下相关变量
     try_current_player = 'blue'  # 默认蓝方先行
@@ -732,6 +1511,7 @@ def undo_try_move():
         BLUE_PIECES[piece_num] = list(from_pos)
     else:
         RED_PIECES[piece_num] = list(from_pos)
+    mark_board_changed()
     
     # 切换当前玩家（与正常逻辑保持一致）
     try_current_player = piece_color
@@ -841,6 +1621,9 @@ def get_direction(pos1, pos2):
 
 
 def in_opposite_direction(pos1, pos2, same_dir=False):
+    # 处理None值
+    if pos1 is None or pos2 is None:
+        return False
     x1, y1 = pos1
     x2, y2 = pos2
     x2 *= -1
@@ -1266,6 +2049,7 @@ def forward_try_move():
         BLUE_PIECES[piece_num] = list(to_pos)
     else:
         RED_PIECES[piece_num] = list(to_pos)
+    mark_board_changed()
 
     # 更新索引与当前玩家（与正常走子逻辑保持一致）
     try_current_index += 1
@@ -1436,6 +2220,8 @@ def move_piece(piece_info, target_pos, blue_pieces, red_pieces, move_type="norma
 
     # 记录这步棋（试下模式下也写入记谱，用于撤回与分析）
     record_move(piece_info, old_pos, target_pos, move_type, formula, res)
+    # 棋盘变化：刷新版本号，避免下一帧继续用旧的递归结果
+    mark_board_changed()
 
     # 在 LAN 模式下，将本地走子同步到对方
     if game_mode == 'lan' and net_session and not processing_remote_move:
@@ -1465,8 +2251,8 @@ def move_piece(piece_info, target_pos, blue_pieces, red_pieces, move_type="norma
         # 切换试下当前玩家用于下一步
         try_current_player = 'red' if color == 'blue' else 'blue'
     
-    # 在练习模式下检查关卡胜利条件
-    if game_mode == 'practice' and current_level and check_level_victory():
+    # 在练习模式下检查关卡胜利条件（演示模式下不触发）
+    if game_mode == 'practice' and current_level and not demo_mode and check_level_victory():
         complete_level()
         # 这里可以添加胜利提示逻辑
     
@@ -1861,14 +2647,14 @@ def draw_calculation_area():
         calc_rect = calc_text.get_rect(center=(825, 50))  # 居中显示
         window.blit(calc_text, calc_rect)
     
-    # 绘制计算结果
-    if calculation_result is not None:
-        y_pos = CALC_AREA_Y + 300
-        result_text = font_title.render("Result:", True, BLACK)
-        window.blit(result_text, (CALC_AREA_X + 10, y_pos))
-        
-        result_value = font_title.render(str(calculation_result), True, BLUE)
-        window.blit(result_value, (CALC_AREA_X + 10, y_pos + 40))
+    # 绘制计算结果（已取消显示）
+    # if calculation_result is not None:
+    #     y_pos = CALC_AREA_Y + 300
+    #     result_text = font_title.render("Result:", True, BLACK)
+    #     window.blit(result_text, (CALC_AREA_X + 10, y_pos))
+    #     
+    #     result_value = font_title.render(str(calculation_result), True, BLUE)
+    #     window.blit(result_value, (CALC_AREA_X + 10, y_pos + 40))
     
     # 绘制取消按钮（用于解除棋盘锁定状态）- 移到棋盘右上角
     cancel_button_rect = pygame.Rect(window_size - 80, OFFSET_Y + 10, 70, 30)
@@ -1883,43 +2669,99 @@ def draw_calculation_area():
         cancel_rect = cancel_text.get_rect(center=(window_size - 45, OFFSET_Y + 25))
         window.blit(cancel_text, cancel_rect)
     
-    # 添加锁定颜色按钮（右下角）
-    lock_color_rect = pygame.Rect(window_size - 150, window_size + OFFSET_Y - 40, 140, 30)
-    # 根据锁定状态使用不同颜色
-    if color_locked:
-        if hovered_button == "lock_color_button":
-            pygame.draw.rect(window, (180, 0, 0), lock_color_rect)  # 深红色（锁定状态）
+    # 在practice模式下，在Color Locked按钮位置显示Demo按钮（覆盖Color Locked按钮）
+    if game_mode == 'practice' and current_level:
+        # 三个按钮纵向排列：Speed / Pause / Demo(Stop)
+        btn_x = window_size - 150
+        btn_w = 140
+        btn_h = 30
+        demo_button_rect = pygame.Rect(btn_x, window_size + OFFSET_Y - 40, btn_w, btn_h)
+        demo_pause_button_rect = pygame.Rect(btn_x, window_size + OFFSET_Y - 75, btn_w, btn_h)
+        demo_speed_button_rect = pygame.Rect(btn_x, window_size + OFFSET_Y - 110, btn_w, btn_h)
+
+        # Speed 按钮（仅 demo_mode 下有意义，但始终显示方便预先设置）
+        pygame.draw.rect(window, (120, 120, 120) if demo_mode else (180, 180, 180), demo_speed_button_rect)
+        pygame.draw.rect(window, BLACK, demo_speed_button_rect, 2)
+        speed_label = f"Speed x{demo_speed_levels[demo_speed_index]:g}"
+        speed_text = font_numbers.render(speed_label, True, WHITE if demo_mode else BLACK)
+        window.blit(speed_text, speed_text.get_rect(center=demo_speed_button_rect.center))
+
+        # Pause 按钮（demo_mode 下可暂停/继续）
+        if demo_mode:
+            pygame.draw.rect(window, (200, 140, 0) if not demo_paused else (0, 140, 0), demo_pause_button_rect)
+            pygame.draw.rect(window, BLACK, demo_pause_button_rect, 2)
+            pause_label = "Pause" if not demo_paused else "Resume"
+            pause_text = font_numbers.render(pause_label, True, WHITE)
+            window.blit(pause_text, pause_text.get_rect(center=demo_pause_button_rect.center))
         else:
-            pygame.draw.rect(window, (220, 0, 0), lock_color_rect)  # 红色（锁定状态）
-        lock_text = font_numbers.render("Cancel Lock", True, WHITE)
+            pygame.draw.rect(window, (210, 210, 210), demo_pause_button_rect)
+            pygame.draw.rect(window, BLACK, demo_pause_button_rect, 2)
+            pause_text = font_numbers.render("Pause", True, (120, 120, 120))
+            window.blit(pause_text, pause_text.get_rect(center=demo_pause_button_rect.center))
+
+        if menu_hovered == "demo_button":
+            pygame.draw.rect(window, LIGHT_YELLOW, demo_button_rect)
+        else:
+            if demo_mode:
+                pygame.draw.rect(window, (220, 0, 0), demo_button_rect)  # 红色（演示中）
+            else:
+                pygame.draw.rect(window, (0, 120, 220), demo_button_rect)  # 蓝色（未演示）
+        pygame.draw.rect(window, BLACK, demo_button_rect, 2)
+        demo_text = font_numbers.render("Demo" if not demo_mode else "Stop", True, WHITE)
+        demo_text_rect = demo_text.get_rect(center=(window_size - 80, window_size + OFFSET_Y - 25))
+        window.blit(demo_text, demo_text_rect)
+        
+        # 存储按钮区域（用于点击检测）
+        if not hasattr(draw_board, 'demo_button_rect'):
+            draw_board.demo_button_rect = None
+        draw_board.demo_button_rect = demo_button_rect
+        if not hasattr(draw_board, 'demo_pause_button_rect'):
+            draw_board.demo_pause_button_rect = None
+        if not hasattr(draw_board, 'demo_speed_button_rect'):
+            draw_board.demo_speed_button_rect = None
+        draw_board.demo_pause_button_rect = demo_pause_button_rect
+        draw_board.demo_speed_button_rect = demo_speed_button_rect
     else:
-        if hovered_button == "lock_color_button":
-            pygame.draw.rect(window, (0, 100, 180), lock_color_rect)  # 深蓝色（未锁定状态）
+        # 非practice模式或非关卡模式，显示Color Locked按钮
+        lock_color_rect = pygame.Rect(window_size - 150, window_size + OFFSET_Y - 40, 140, 30)
+        # 根据锁定状态使用不同颜色
+        if color_locked:
+            if hovered_button == "lock_color_button":
+                pygame.draw.rect(window, (180, 0, 0), lock_color_rect)  # 深红色（锁定状态）
+            else:
+                pygame.draw.rect(window, (220, 0, 0), lock_color_rect)  # 红色（锁定状态）
+            lock_text = font_numbers.render("Cancel Lock", True, WHITE)
         else:
-            pygame.draw.rect(window, (0, 120, 220), lock_color_rect)  # 蓝色（未锁定状态）
-        lock_text = font_numbers.render("Color Locked", True, WHITE)
-    
-    pygame.draw.rect(window, BLACK, lock_color_rect, 2)
-    lock_rect = lock_text.get_rect(center=(window_size - 80, window_size + OFFSET_Y - 25))
-    window.blit(lock_text, lock_rect)
+            if hovered_button == "lock_color_button":
+                pygame.draw.rect(window, (0, 100, 180), lock_color_rect)  # 深蓝色（未锁定状态）
+            else:
+                pygame.draw.rect(window, (0, 120, 220), lock_color_rect)  # 蓝色（未锁定状态）
+            lock_text = font_numbers.render("Color Locked", True, WHITE)
+        
+        pygame.draw.rect(window, BLACK, lock_color_rect, 2)
+        lock_rect = lock_text.get_rect(center=(window_size - 80, window_size + OFFSET_Y - 25))
+        window.blit(lock_text, lock_rect)
 
     replay_button = []
     if game_mode == 'replay':
         replay_button = draw_replay_controls()
     
     # 返回按钮区域，用于事件处理
-    return {
+    button_areas_dict = {
         "operations": ops,
         "calc_button": calc_button_rect,
         "clear_button": clear_button_rect,
         "delete_button": delete_button_rect,  # 添加删除按钮
         "cancel_button": cancel_button_rect,
-        "lock_color_button": lock_color_rect,  # 添加锁定颜色按钮
         "formula_rect": formula_rect,  # 算式文本框区域
         "number_buttons": number_buttons,  # 数字按钮区域
         "continuous_span_area": continuous_span_area,
         "replay_button": replay_button
     }
+    # 只在非practice模式或非关卡模式时添加lock_color_button
+    if not (game_mode == 'practice' and current_level):
+        button_areas_dict["lock_color_button"] = lock_color_rect
+    return button_areas_dict
 
 def calculate_result():
     """根据选择的数字和操作计算结果"""
@@ -2125,6 +2967,47 @@ def draw_custom_setup():
     draw_custom_setup.button_rects["save"] = save_button
     draw_custom_setup.button_rects["back"] = back_button
     
+    # 检测鼠标悬停并显示坐标
+    mouse_pos = pygame.mouse.get_pos()
+    hovered_point = None
+    hovered_coords = None
+    
+    # 检查鼠标是否悬停在某个棋盘点上
+    for (col, row), (x, y) in point_map.items():
+        if is_point_in_circle(mouse_pos, (x, y), RADIUS):
+            hovered_point = (col, row)
+            hovered_coords = (x, y)
+            break
+    
+    # 如果悬停在某个点上，显示坐标
+    if hovered_point:
+        col, row = hovered_point
+        coord_text = f"({col}, {row})"
+        coord_font = pygame.font.Font(None, 24)
+        coord_surface = coord_font.render(coord_text, True, BLACK)
+        
+        # 在鼠标位置附近绘制坐标文本（避免被鼠标遮挡）
+        # 计算文本位置：鼠标右上方
+        text_x = mouse_pos[0] + 20
+        text_y = mouse_pos[1] - 30
+        
+        # 确保文本不超出窗口边界
+        text_width, text_height = coord_surface.get_size()
+        if text_x + text_width > window.get_width():
+            text_x = mouse_pos[0] - text_width - 20
+        if text_y < 0:
+            text_y = mouse_pos[1] + 20
+        
+        # 绘制半透明背景（提高可读性）
+        padding = 4
+        bg_rect = pygame.Rect(text_x - padding, text_y - padding, text_width + padding * 2, text_height + padding * 2)
+        bg_surface = pygame.Surface((bg_rect.width, bg_rect.height), pygame.SRCALPHA)
+        bg_surface.fill((255, 255, 255, 200))  # 半透明白色背景
+        window.blit(bg_surface, bg_rect)
+        
+        # 绘制坐标文本
+        window.blit(coord_surface, (text_x, text_y))
+    
     return all_points, point_map
 
 
@@ -2281,6 +3164,116 @@ def draw_practice_levels():
     draw_menu.button_rects["back"] = back_button_rect
 
 
+def draw_cursor_selection():
+    """绘制鼠标指针选择界面"""
+    global selected_cursor_filename
+    
+    # 绘制标题
+    title_font = pygame.font.Font(None, 48)
+    title_text = title_font.render("Select Cursor", True, BLACK)
+    title_rect = title_text.get_rect(center=(window.get_width()//2, 100))
+    window.blit(title_text, title_rect)
+    
+    # 获取custom_cursor文件夹中的所有鼠标指针文件
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    cursor_dir = os.path.join(base_dir, 'custom_cursor')
+    cursor_files = []
+    
+    if os.path.exists(cursor_dir):
+        for filename in os.listdir(cursor_dir):
+            if filename.startswith('custom_') and filename.endswith('.png'):
+                try:
+                    # 提取数字
+                    num_str = filename[7:-4]  # 去掉"custom_"和".png"
+                    num = int(num_str)
+                    cursor_files.append((num, filename))
+                except:
+                    continue
+    
+    # 按数字排序
+    cursor_files.sort(key=lambda x: x[0])
+    
+    # 显示文件列表
+    button_font = pygame.font.Font(None, 32)
+    button_width = 400
+    button_height = 60
+    button_spacing = 80
+    start_y = 180
+    
+    # 加载保存的配置
+    config_file = os.path.join(base_dir, 'cursor_config.json')
+    saved_cursor = None
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+                saved_cursor = config.get('selected_cursor')
+        except:
+            pass
+    
+    if not cursor_files:
+        no_files_text = button_font.render("No cursor files found in custom_cursor folder", True, BLACK)
+        no_files_rect = no_files_text.get_rect(center=(window.get_width()//2, 300))
+        window.blit(no_files_text, no_files_rect)
+    else:
+        for i, (num, filename) in enumerate(cursor_files):
+            y = start_y + i * button_spacing
+            button_rect = pygame.Rect(
+                window.get_width()//2 - button_width//2,
+                y,
+                button_width,
+                button_height
+            )
+            
+            # 检查是否是当前选中的
+            is_selected = (saved_cursor == filename) or (selected_cursor_filename == filename)
+            
+            # 根据鼠标悬停状态和选中状态改变颜色
+            if menu_hovered == f"cursor_{i}":
+                button_color = LIGHT_YELLOW
+                text_color = BLACK
+            elif is_selected:
+                button_color = (200, 255, 200)  # 浅绿色表示已选中
+                text_color = BLACK
+            else:
+                button_color = WHITE
+                text_color = BLACK
+                
+            # 绘制按钮
+            pygame.draw.rect(window, button_color, button_rect)
+            pygame.draw.rect(window, BLACK, button_rect, 2)
+            
+            # 显示文件名
+            display_text = f"Cursor {num}"
+            if is_selected:
+                display_text += " (Selected)"
+            
+            text = button_font.render(display_text, True, text_color)
+            text_rect = text.get_rect(center=button_rect.center)
+            window.blit(text, text_rect)
+            
+            # 存储按钮区域用于点击检测
+            if not hasattr(draw_cursor_selection, 'button_rects'):
+                draw_cursor_selection.button_rects = {}
+            draw_cursor_selection.button_rects[f"cursor_{i}"] = button_rect
+    
+    # 返回按钮
+    back_button_rect = pygame.Rect(50, 50, 100, 40)
+    if menu_hovered == "back_cursor" or menu_hovered == "back":
+        pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
+    else:
+        pygame.draw.rect(window, WHITE, back_button_rect)
+    pygame.draw.rect(window, BLACK, back_button_rect, 2)
+    back_text = button_font.render("Back", True, BLACK)
+    back_text_rect = back_text.get_rect(center=back_button_rect.center)
+    window.blit(back_text, back_text_rect)
+    
+    # 确保button_rects字典存在
+    if not hasattr(draw_cursor_selection, 'button_rects'):
+        draw_cursor_selection.button_rects = {}
+    draw_cursor_selection.button_rects["back"] = back_button_rect
+
+
 def draw_menu():
     """绘制主菜单界面"""
     global replay_files, renaming_file, rename_input
@@ -2295,6 +3288,11 @@ def draw_menu():
     # 如果选择了practice模式且有关卡配置，显示关卡选择界面
     if game_mode == 'practice' and levels_config:
         draw_practice_levels()
+        return
+    
+    # 如果选择了custom模式，显示鼠标指针选择界面
+    if game_mode == 'custom':
+        draw_cursor_selection()
         return
     
     # 如果选择了replay模式，显示文件选择界面
@@ -2657,8 +3655,8 @@ def draw_menu():
         title_rect = title_text.get_rect(center=(window.get_width()//2, 150))
         window.blit(title_text, title_rect)
         
-        # 菜单选项
-        menu_options = ["Play", "Replay", "Practice", "Custom Setup", "LAN"]
+        # 菜单选项（隐藏Custom Setup，添加Custom）
+        menu_options = ["Play", "Replay", "Practice", "Custom", "LAN"]
         button_font = pygame.font.Font(None, 48)
         button_width = 250  # 从200增加到250
         button_height = 60
@@ -2706,46 +3704,69 @@ def get_menu_button_at_pos(pos):
 
 def draw_level_hint(screen):
     """Draw level hint information in the top right corner of the game interface"""
-    global hint_box_pos, hint_box_dragging, hint_box_offset
+    global hint_box_pos, hint_box_dragging, hint_box_offset, hint_box_collapsed, hint_box_rect, current_level, game_mode, levels_config, allowed_piece
     
     if game_mode != 'practice' or not current_level or not levels_config:
+        return
+    
+    # 演示模式下隐藏hint box
+    if demo_mode:
         return
     
     level_info = levels_config['levels'][current_level - 1]
     
     # Dynamic calculation of hint box size
-    base_width = 240
-    base_height = 90
+    base_width = 400  # 增加宽度以容纳更大的字体
+    base_height = 40  # 基础高度（标题栏）
     
-    # Adjust height based on text length
-    desc_font = pygame.font.Font(None, 18)
+    # Adjust height based on text length - 缩小字体到原来的2/3
+    desc_font = pygame.font.Font(None, 27)  # 从40缩小到27（约2/3）
     objective_text = level_info['objective']
     
     def wrap_text(text, font, max_width):
-        words = text.split(' ')
-        lines = []
-        current_line = ""
+        # Split by newlines first, then wrap each paragraph
+        paragraphs = text.split('\n')
+        all_lines = []
         
-        for word in words:
-            test_line = current_line + (" " if current_line else "") + word
-            if font.size(test_line)[0] <= max_width:
-                current_line = test_line
-            else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
+        for paragraph in paragraphs:
+            if not paragraph.strip():
+                all_lines.append("")  # 保留空行作为间距
+                continue
+            words = paragraph.split(' ')
+            current_line = ""
+            
+            for word in words:
+                test_line = current_line + (" " if current_line else "") + word
+                if font.size(test_line)[0] <= max_width:
+                    current_line = test_line
+                else:
+                    if current_line:
+                        all_lines.append(current_line)
+                    current_line = word
+            
+            if current_line:
+                all_lines.append(current_line)
         
-        if current_line:
-            lines.append(current_line)
-        
-        return lines
+        return all_lines
     
     text_width = base_width - 20
     objective_lines = wrap_text(objective_text, desc_font, text_width)
     
-    # Adjust height based on number of lines
-    line_count = len(objective_lines)
-    hint_height = base_height + max(0, (line_count - 2) * 18)
+    # Calculate required height - 调整以适应更大的字体
+    # Title: 40px, Text start: 50px, Line height: 42px (适应40号字体), Demo button: 35px + 15px spacing
+    title_height = 40
+    text_start_y = 50
+    line_height = 32  # 从50缩小到32，减小行间距
+    demo_button_height = 35
+    bottom_padding = 15
+    
+    # Count non-empty lines for height calculation
+    non_empty_lines = sum(1 for line in objective_lines if line.strip())
+    empty_lines = len(objective_lines) - non_empty_lines
+    
+    # Calculate total height needed
+    text_height = non_empty_lines * line_height + empty_lines * (line_height // 2)  # 空行占一半高度
+    hint_height = text_start_y + text_height + 15 + demo_button_height + bottom_padding
     hint_width = base_width
     
     # Initialize hint box position if not set
@@ -2754,6 +3775,48 @@ def draw_level_hint(screen):
     
     hint_x, hint_y = hint_box_pos
     
+    # 如果收起，只显示标题栏
+    if hint_box_collapsed:
+        collapsed_height = 40  # 从25增加到40以适应更大的字体
+        hint_surface = pygame.Surface((hint_width, collapsed_height), pygame.SRCALPHA)
+        hint_rect = pygame.Rect(0, 0, hint_width, collapsed_height)
+        pygame.draw.rect(hint_surface, (255, 255, 240, 220), hint_rect)
+        pygame.draw.rect(hint_surface, (0, 0, 0, 220), hint_rect, 2)
+        
+        # 绘制标题 - 缩小字体
+        title_font = pygame.font.Font(None, 24)  # 从32缩小到24（约2/3）
+        title_text = title_font.render(f"Level {current_level}: {level_info['name']}", True, BLACK)
+        title_rect = title_text.get_rect(center=(hint_width // 2, collapsed_height // 2))
+        hint_surface.blit(title_text, title_rect)
+        
+        # 展开按钮
+        expand_button_size = 15
+        expand_button_x = hint_width - expand_button_size - 5
+        expand_button_y = (collapsed_height - expand_button_size) // 2
+        expand_button_rect = pygame.Rect(expand_button_x, expand_button_y, expand_button_size, expand_button_size)
+        if menu_hovered == "hint_expand":
+            pygame.draw.rect(hint_surface, LIGHT_YELLOW, expand_button_rect)
+        else:
+            pygame.draw.rect(hint_surface, WHITE, expand_button_rect)
+        pygame.draw.rect(hint_surface, BLACK, expand_button_rect, 1)
+        # 绘制向下箭头
+        arrow_points = [(expand_button_x + 3, expand_button_y + 5), 
+                       (expand_button_x + expand_button_size // 2, expand_button_y + expand_button_size - 5),
+                       (expand_button_x + expand_button_size - 3, expand_button_y + 5)]
+        pygame.draw.polygon(hint_surface, BLACK, arrow_points)
+        
+        screen.blit(hint_surface, (hint_x, hint_y))
+        hint_box_rect = pygame.Rect(hint_x, hint_y, hint_width, collapsed_height)
+        
+        # 存储展开按钮区域（使用屏幕坐标）
+        if not hasattr(draw_level_hint, 'button_rects'):
+            draw_level_hint.button_rects = {}
+        # 确保使用正确的屏幕坐标
+        expand_button_screen_rect = pygame.Rect(hint_x + expand_button_x, hint_y + expand_button_y, expand_button_size, expand_button_size)
+        draw_level_hint.button_rects["expand"] = expand_button_screen_rect
+        return
+    
+    # 展开状态：显示完整内容
     # Create transparent surface
     hint_surface = pygame.Surface((hint_width, hint_height), pygame.SRCALPHA)
     
@@ -2762,33 +3825,147 @@ def draw_level_hint(screen):
     pygame.draw.rect(hint_surface, (255, 255, 240, 220), hint_rect)  # Light yellow background with transparency
     pygame.draw.rect(hint_surface, (0, 0, 0, 220), hint_rect, 2)  # Black border with some transparency
     
-    # Draw level title
-    title_font = pygame.font.Font(None, 22)
+    # Draw level title - 缩小标题字体
+    title_font = pygame.font.Font(None, 24)  # 从32缩小到24（约2/3）
     title_text = title_font.render(f"Level {current_level}: {level_info['name']}", True, BLACK)
     title_rect = title_text.get_rect(center=(hint_width // 2, 15))
     hint_surface.blit(title_text, title_rect)
     
+    # 收起按钮
+    collapse_button_size = 15
+    collapse_button_x = hint_width - collapse_button_size - 5
+    collapse_button_y = 5
+    collapse_button_rect = pygame.Rect(collapse_button_x, collapse_button_y, collapse_button_size, collapse_button_size)
+    if menu_hovered == "hint_collapse":
+        pygame.draw.rect(hint_surface, LIGHT_YELLOW, collapse_button_rect)
+    else:
+        pygame.draw.rect(hint_surface, WHITE, collapse_button_rect)
+    pygame.draw.rect(hint_surface, BLACK, collapse_button_rect, 1)
+    # 绘制向上箭头
+    arrow_points = [(collapse_button_x + 3, collapse_button_y + collapse_button_size - 5),
+                   (collapse_button_x + collapse_button_size // 2, collapse_button_y + 5),
+                   (collapse_button_x + collapse_button_size - 3, collapse_button_y + collapse_button_size - 5)]
+    pygame.draw.polygon(hint_surface, BLACK, arrow_points)
+    
     # Draw objective description text
-    start_y = 35
+    start_y = 50  # 调整起始位置以适应更大的标题
+    current_y = start_y
     for i, line in enumerate(objective_lines):
-        desc_text = desc_font.render(line, True, BLACK)
-        desc_rect = desc_text.get_rect(center=(hint_width // 2, start_y + i * 18))
-        hint_surface.blit(desc_text, desc_rect)
+        if line.strip():  # 非空行
+            desc_text = desc_font.render(line, True, BLACK)
+            desc_rect = desc_text.get_rect(center=(hint_width // 2, current_y))
+            # 确保文本不会超出surface范围
+            if current_y + 9 <= hint_height - demo_button_height - bottom_padding:
+                hint_surface.blit(desc_text, desc_rect)
+            current_y += line_height
+        else:  # 空行，减少间距
+            current_y += line_height // 2  # 空行也使用更大的间距
+    
+    # Initialize target_y before using it
+    target_y = current_y + 5
+    
+    # Demo button
+    demo_button_y = target_y + 5
+    demo_button_width = 80
+    # demo_button_height already defined above
+    demo_button_x = (hint_width - demo_button_width) // 2
+    demo_button_rect = pygame.Rect(demo_button_x, demo_button_y, demo_button_width, demo_button_height)
+    if menu_hovered == "demo_button":
+        pygame.draw.rect(hint_surface, LIGHT_YELLOW, demo_button_rect)
+    else:
+        pygame.draw.rect(hint_surface, WHITE, demo_button_rect)
+    pygame.draw.rect(hint_surface, BLACK, demo_button_rect, 2)
+    # Demo按钮文字使用更大的字体
+    demo_button_font = pygame.font.Font(None, 32)  # 增大Demo按钮文字
+    demo_text = demo_button_font.render("Demo" if not demo_mode else "Stop", True, BLACK)
+    demo_text_rect = demo_text.get_rect(center=demo_button_rect.center)
+    hint_surface.blit(demo_text, demo_text_rect)
+    
+    # Update hint height to include demo button
+    hint_height = max(hint_height, demo_button_y + demo_button_height + 10)
+    hint_surface = pygame.Surface((hint_width, hint_height), pygame.SRCALPHA)
+    hint_rect = pygame.Rect(0, 0, hint_width, hint_height)
+    pygame.draw.rect(hint_surface, (255, 255, 240, 220), hint_rect)
+    pygame.draw.rect(hint_surface, (0, 0, 0, 220), hint_rect, 2)
+    
+    # Redraw all content
+    hint_surface.blit(title_text, title_rect)
+    collapse_button_rect = pygame.Rect(collapse_button_x, collapse_button_y, collapse_button_size, collapse_button_size)
+    if menu_hovered == "hint_collapse":
+        pygame.draw.rect(hint_surface, LIGHT_YELLOW, collapse_button_rect)
+    else:
+        pygame.draw.rect(hint_surface, WHITE, collapse_button_rect)
+    pygame.draw.rect(hint_surface, BLACK, collapse_button_rect, 1)
+    arrow_points = [(collapse_button_x + 3, collapse_button_y + collapse_button_size - 5),
+                   (collapse_button_x + collapse_button_size // 2, collapse_button_y + 5),
+                   (collapse_button_x + collapse_button_size - 3, collapse_button_y + collapse_button_size - 5)]
+    pygame.draw.polygon(hint_surface, BLACK, arrow_points)
+    
+    # 使用正确的行间距绘制文本
+    current_y = start_y
+    for i, line in enumerate(objective_lines):
+        if line.strip():  # 非空行
+            desc_text = desc_font.render(line, True, BLACK)
+            desc_rect = desc_text.get_rect(center=(hint_width // 2, current_y))
+            # 确保文本不会超出surface范围
+            if current_y + 20 <= hint_height - demo_button_height - bottom_padding:
+                hint_surface.blit(desc_text, desc_rect)
+            current_y += line_height
+        else:  # 空行，减少间距
+            current_y += line_height // 2
     
     # Show allowed piece to move
     if allowed_piece:
         color_name = "Blue" if allowed_piece[0] == "blue" else "Red"
-        target_y = start_y + len(objective_lines) * 18 + 5
         target_text = desc_font.render(f"Only move: {color_name} piece {allowed_piece[1]}", True, (200, 0, 0))
         target_rect = target_text.get_rect(center=(hint_width // 2, target_y))
+        hint_surface.blit(target_text, target_rect)
+    
+    # 不再在hint box中显示Demo按钮，将在draw_board中绘制在Color Locked按钮位置
+    hint_surface = pygame.Surface((hint_width, hint_height), pygame.SRCALPHA)
+    hint_rect = pygame.Rect(0, 0, hint_width, hint_height)
+    pygame.draw.rect(hint_surface, (255, 255, 240, 220), hint_rect)
+    pygame.draw.rect(hint_surface, (0, 0, 0, 220), hint_rect, 2)
+    
+    # Redraw all content
+    hint_surface.blit(title_text, title_rect)
+    collapse_button_rect = pygame.Rect(collapse_button_x, collapse_button_y, collapse_button_size, collapse_button_size)
+    if menu_hovered == "hint_collapse":
+        pygame.draw.rect(hint_surface, LIGHT_YELLOW, collapse_button_rect)
+    else:
+        pygame.draw.rect(hint_surface, WHITE, collapse_button_rect)
+    pygame.draw.rect(hint_surface, BLACK, collapse_button_rect, 1)
+    arrow_points = [(collapse_button_x + 3, collapse_button_y + collapse_button_size - 5),
+                   (collapse_button_x + collapse_button_size // 2, collapse_button_y + 5),
+                   (collapse_button_x + collapse_button_size - 3, collapse_button_y + collapse_button_size - 5)]
+    pygame.draw.polygon(hint_surface, BLACK, arrow_points)
+    
+    # 使用正确的行间距绘制文本
+    current_y = start_y
+    for i, line in enumerate(objective_lines):
+        if line.strip():  # 非空行
+            desc_text = desc_font.render(line, True, BLACK)
+            desc_rect = desc_text.get_rect(center=(hint_width // 2, current_y))
+            # 确保文本不会超出surface范围
+            if current_y + 20 <= hint_height - demo_button_height - bottom_padding:
+                hint_surface.blit(desc_text, desc_rect)
+            current_y += line_height
+        else:  # 空行，减少间距
+            current_y += line_height // 2
+    
+    if allowed_piece:
         hint_surface.blit(target_text, target_rect)
     
     # Blit the transparent surface to the main screen
     screen.blit(hint_surface, (hint_x, hint_y))
     
     # Store the hint box rect for drag detection
-    global hint_box_rect
     hint_box_rect = pygame.Rect(hint_x, hint_y, hint_width, hint_height)
+    
+    # 存储收起按钮区域（Demo按钮不再在这里，在draw_board中绘制）
+    if not hasattr(draw_level_hint, 'button_rects'):
+        draw_level_hint.button_rects = {}
+    draw_level_hint.button_rects["collapse"] = pygame.Rect(hint_x + collapse_button_x, hint_y + collapse_button_y, collapse_button_size, collapse_button_size)
 
 
 def draw_board():
@@ -2855,52 +4032,27 @@ def draw_board():
                 text_rect = text_surf.get_rect(center=(int(x), int(y)))
                 window.blit(text_surf, text_rect)
     
-    # 如果有选中的棋子，显示备选跨越点（在回放但非试下模式下不显示灰/紫点）
+    # 如果有选中的棋子，显示备选跨越点（在回放但非试下模式下不显示灰/紫点，demo模式下允许显示）
     potential_jumps = []
     potential_jumps2 = []
-    if selected_piece and not board_locked and not (game_mode == 'replay' and not try_mode):
-        potential_jumps = get_potential_jump_positions(selected_piece[2], point_map, BLUE_PIECES, RED_PIECES, all_points, 2)
+    if selected_piece and (not board_locked or demo_mode) and not (game_mode == 'replay' and not try_mode):
+        # 性能优化：递归结果缓存，避免每帧重复计算
+        potential_jumps, potential_jumps2 = get_cached_jump_candidates(point_map, all_points)
                 
         if potential_jumps:
             for col, row, _ in potential_jumps:  # 修改：现在返回col,row坐标
                 # 使用point_map将col,row转换为x,y坐标用于绘制
                 x, y = point_map[(col, row)]
                 pygame.draw.circle(window, GRAY, (int(x), int(y)), RADIUS + 3, 3)  # 灰色圆环标记备选跨越点
-        
-        initial_moves = []
-        res = []
-        # print(valid_moves)
-        if valid_moves:
-            for pos_x, pos_y, target_pos, direction in valid_moves:
-                piece_x, piece_y = selected_piece[3]
-                if (pos_x - piece_x)**2 + (pos_y - piece_y)**2 > GRID ** 2 * 1.5:
-                    # 转换为棋盘坐标以保持一致性
-                    col, row = xy_to_pos(pos_x, pos_y)
-                    initial_moves.append((col, row, direction))
-                # 同样转换res中的坐标
-                col, row = xy_to_pos(pos_x, pos_y)
-                res.append((col, row, direction))
-        # potential_jumps已经是棋盘坐标格式，直接扩展
-        initial_moves.extend(potential_jumps)
-        res.extend(potential_jumps)
-        potential_jumps2 = get_potential_jump_recursion(point_map, BLUE_PIECES, RED_PIECES, all_points, res, initial_moves, [])
+
         if potential_jumps2:
-            # print("1:" + str(potential_jumps))
-            # print("2:" + str(potential_jumps2))
-            for i in range(len(potential_jumps2) - 1, -1, -1):  # 修改：现在获取col, row坐标
-                # 使用point_map将col,row转换为x,y坐标
-                col, row, _ = potential_jumps2[i]
-                start = (selected_piece[2][0], selected_piece[2][1], (2, 2))
-                temp_paths = get_paths(start, (col, row), point_map, BLUE_PIECES, RED_PIECES, all_points, [], [])
-                if not temp_paths:
-                    potential_jumps2.pop(i)
             for col, row, _ in potential_jumps2:  # 现在统一使用棋盘坐标
                 # 使用point_map转换为屏幕坐标进行绘制
                 x, y = point_map[(col, row)]
                 pygame.draw.circle(window, PURPLE, (int(x), int(y)), RADIUS + 3, 3)  # 紫色圆环标记备选跨越点
 
-    # 高亮显示有效移动位置（最后绘制，确保显示在最上层）
-    if selected_piece and valid_moves and not board_locked and not (game_mode == 'replay' and not try_mode):
+    # 高亮显示有效移动位置（最后绘制，确保显示在最上层，demo模式下允许显示）
+    if selected_piece and valid_moves and (not board_locked or demo_mode) and not (game_mode == 'replay' and not try_mode):
         highlight_valid_moves(window, [(x, y) for x, y, _, _ in valid_moves])
     # 如果有选中的灰色点，高亮显示
     if selected_gray_point and board_locked and not (game_mode == 'replay' and not try_mode):
@@ -2969,25 +4121,6 @@ def draw_board():
         god_text = font_god.render('God Mode', True, (255,0,0))
         window.blit(god_text, (20, 50))
     
-    # Back button for REPLAY state
-    if state == "REPLAY":
-        button_font = pygame.font.Font(None, 32)
-        back_button_rect = pygame.Rect(50, 50, 100, 40)
-        # 根据鼠标悬停状态改变颜色
-        if menu_hovered == "back":
-            pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
-        else:
-            pygame.draw.rect(window, WHITE, back_button_rect)
-        pygame.draw.rect(window, BLACK, back_button_rect, 2)
-        back_text = button_font.render("Back", True, BLACK)
-        back_text_rect = back_text.get_rect(center=back_button_rect.center)
-        window.blit(back_text, back_text_rect)
-        
-        # 存储按钮区域用于点击检测
-        if not hasattr(draw_board, 'replay_button_rects'):
-            draw_board.replay_button_rects = {}
-        draw_board.replay_button_rects["back"] = back_button_rect
-    
     # 新增：END状态下显示分数和胜负
     if state == "END":
         blue_score, red_score = calculate_point()
@@ -3006,16 +4139,254 @@ def draw_board():
         window.blit(text1, (window_size//2-100, window_size//2-60))
         window.blit(text2, (window_size//2-100, window_size//2))
         window.blit(text3, (window_size//2-100, window_size//2+60))
+
+    # 绘制关卡提示信息（仅在practice模式下）
+    if game_mode == 'practice':
+        draw_level_hint(window)
+        # 更新和绘制演示模式
+        if demo_mode:
+            update_demo_virtual_mouse()
+            draw_demo_virtual_mouse(window)
+            draw_demo_explanation(window)
+            
+            # 自动执行下一步
+            if demo_auto_playing and not demo_paused:
+                current_time = time.time()
+                # 如果正在等待点击，使用更短的延迟
+                base_delay = demo_click_delay if demo_waiting_for_click else demo_step_delay
+                speed = demo_speed if demo_speed else 1.0
+                delay = base_delay / speed
+                if current_time - demo_last_step_time >= delay:
+                    execute_demo_step()
+    
+    # 绘制第一关提示弹窗
+    if show_first_level_tip and current_level == 1:
+        # 创建半透明背景
+        overlay = pygame.Surface((window.get_width(), window.get_height()), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 128))  # 半透明黑色
+        window.blit(overlay, (0, 0))
         
-        # Back button for END state
+        # 对话框背景
+        dialog_width = 450
+        dialog_height = 250  # 增加高度以容纳更多内容
+        dialog_x = (window.get_width() - dialog_width) // 2
+        dialog_y = (window.get_height() - dialog_height) // 2
+        dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_width, dialog_height)
+        pygame.draw.rect(window, WHITE, dialog_rect)
+        pygame.draw.rect(window, BLACK, dialog_rect, 3)
+        
+        # 提示文本
+        font = pygame.font.Font(None, 28)
+        title_text = font.render("Tip", True, BLACK)
+        title_rect = title_text.get_rect(center=(dialog_x + dialog_width // 2, dialog_y + 30))
+        window.blit(title_text, title_rect)
+        
+        # 内容文本
+        content_font = pygame.font.Font(None, 22)
+        lines = [
+            "The hint window can be dragged or collapsed",
+            "Click the arrow button to collapse/expand the hint window",
+            "",
+            "Demo function: Click the 'Demo' button to watch",
+            "an automated demonstration of the level solution"
+        ]
+        for i, line in enumerate(lines):
+            if line:  # 跳过空行
+                content_text = content_font.render(line, True, BLACK)
+                content_rect = content_text.get_rect(center=(dialog_x + dialog_width // 2, dialog_y + 70 + i * 30))
+                window.blit(content_text, content_rect)
+        
+        # 关闭按钮
+        close_button_rect = pygame.Rect(dialog_x + dialog_width - 30, dialog_y + 5, 25, 25)
+        if menu_hovered == "close_first_tip":
+            pygame.draw.rect(window, LIGHT_YELLOW, close_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, close_button_rect)
+        pygame.draw.rect(window, BLACK, close_button_rect, 2)
+        # 绘制X
+        close_font = pygame.font.Font(None, 20)
+        close_text = close_font.render("×", True, BLACK)
+        close_text_rect = close_text.get_rect(center=close_button_rect.center)
+        window.blit(close_text, close_text_rect)
+        
+        # 确定按钮
+        ok_button_rect = pygame.Rect(dialog_x + (dialog_width - 100) // 2, dialog_y + 200, 100, 35)
+        if menu_hovered == "ok_first_tip":
+            pygame.draw.rect(window, LIGHT_YELLOW, ok_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, ok_button_rect)
+        pygame.draw.rect(window, BLACK, ok_button_rect, 2)
+        ok_text = font.render("Got it", True, BLACK)
+        ok_text_rect = ok_text.get_rect(center=ok_button_rect.center)
+        window.blit(ok_text, ok_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'first_tip_rects'):
+            draw_board.first_tip_rects = {}
+        draw_board.first_tip_rects["close"] = close_button_rect
+        draw_board.first_tip_rects["ok"] = ok_button_rect
+    
+    # 绘制第三关单跨提示弹窗
+    if show_level3_span_tip and current_level == 3:
+        # 创建半透明背景
+        overlay = pygame.Surface((window.get_width(), window.get_height()), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 128))  # 半透明黑色
+        window.blit(overlay, (0, 0))
+        
+        # 对话框背景
+        dialog_width = 500
+        dialog_height = 200
+        dialog_x = (window.get_width() - dialog_width) // 2
+        dialog_y = (window.get_height() - dialog_height) // 2
+        dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_width, dialog_height)
+        pygame.draw.rect(window, WHITE, dialog_rect)
+        pygame.draw.rect(window, BLACK, dialog_rect, 3)
+        
+        # 提示文本
+        font = pygame.font.Font(None, 28)
+        title_text = font.render("Span Calculation Tips", True, BLACK)
+        title_rect = title_text.get_rect(center=(dialog_x + dialog_width // 2, dialog_y + 30))
+        window.blit(title_text, title_rect)
+        
+        # 内容文本（根据步骤显示不同内容）
+        content_font = pygame.font.Font(None, 22)
+        tip_messages = [
+            "Cancel button: Click to cancel the span calculation",
+            "Delete button: Click to delete the last entered number or operator",
+            "Clear button: Click to clear the current formula and restore numbers",
+            "Calculate button: Click to calculate the formula result"
+        ]
+        
+        if level3_tip_step < len(tip_messages):
+            lines = [
+                f"Step {level3_tip_step + 1} of {len(tip_messages)}:",
+                tip_messages[level3_tip_step]
+            ]
+            for i, line in enumerate(lines):
+                content_text = content_font.render(line, True, BLACK)
+                content_rect = content_text.get_rect(center=(dialog_x + dialog_width // 2, dialog_y + 70 + i * 30))
+                window.blit(content_text, content_rect)
+        
+        # 关闭按钮
+        close_button_rect = pygame.Rect(dialog_x + dialog_width - 30, dialog_y + 5, 25, 25)
+        if menu_hovered == "close_level3_tip":
+            pygame.draw.rect(window, LIGHT_YELLOW, close_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, close_button_rect)
+        pygame.draw.rect(window, BLACK, close_button_rect, 2)
+        close_font = pygame.font.Font(None, 20)
+        close_text = close_font.render("×", True, BLACK)
+        close_text_rect = close_text.get_rect(center=close_button_rect.center)
+        window.blit(close_text, close_text_rect)
+        
+        # 下一步/完成按钮
+        if level3_tip_step < len(tip_messages) - 1:
+            next_button_text = "Next"
+        else:
+            next_button_text = "Got it"
+        next_button_rect = pygame.Rect(dialog_x + (dialog_width - 100) // 2, dialog_y + 150, 100, 35)
+        if menu_hovered == "next_level3_tip":
+            pygame.draw.rect(window, LIGHT_YELLOW, next_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, next_button_rect)
+        pygame.draw.rect(window, BLACK, next_button_rect, 2)
+        next_text = font.render(next_button_text, True, BLACK)
+        next_text_rect = next_text.get_rect(center=next_button_rect.center)
+        window.blit(next_text, next_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'level3_tip_rects'):
+            draw_board.level3_tip_rects = {}
+        draw_board.level3_tip_rects["close"] = close_button_rect
+        draw_board.level3_tip_rects["next"] = next_button_rect
+    
+    # Back button for REPLAY state - 最后绘制，确保显示在最上层，放在左下角
+    if state == "REPLAY":
         button_font = pygame.font.Font(None, 32)
-        back_button_rect = pygame.Rect(50, 50, 100, 40)
+        # 左下角位置：距离左边50，距离底部50
+        back_button_rect = pygame.Rect(50, window_size + OFFSET_Y - 50, 100, 40)
+        # 先绘制一个半透明的背景，确保按钮可见
+        button_bg = pygame.Surface((100, 40), pygame.SRCALPHA)
+        button_bg.fill((255, 255, 255, 240))  # 半透明白色背景
+        window.blit(button_bg, back_button_rect)
         # 根据鼠标悬停状态改变颜色
         if menu_hovered == "back":
             pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
         else:
             pygame.draw.rect(window, WHITE, back_button_rect)
-        pygame.draw.rect(window, BLACK, back_button_rect, 2)
+        pygame.draw.rect(window, BLACK, back_button_rect, 3)  # 加粗边框
+        back_text = button_font.render("Back", True, BLACK)
+        back_text_rect = back_text.get_rect(center=back_button_rect.center)
+        window.blit(back_text, back_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'replay_button_rects'):
+            draw_board.replay_button_rects = {}
+        draw_board.replay_button_rects["back"] = back_button_rect
+    
+    # Back button for GAME state (play mode) - 最后绘制，确保显示在最上层，放在左下角
+    if state == "GAME" and game_mode == 'play':
+        button_font = pygame.font.Font(None, 32)
+        # 左下角位置：距离左边50，距离底部50
+        back_button_rect = pygame.Rect(50, window_size + OFFSET_Y - 50, 100, 40)
+        # 先绘制一个半透明的背景，确保按钮可见
+        button_bg = pygame.Surface((100, 40), pygame.SRCALPHA)
+        button_bg.fill((255, 255, 255, 240))  # 半透明白色背景
+        window.blit(button_bg, back_button_rect)
+        # 根据鼠标悬停状态改变颜色
+        if menu_hovered == "back":
+            pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, back_button_rect)
+        pygame.draw.rect(window, BLACK, back_button_rect, 3)  # 加粗边框
+        back_text = button_font.render("Back", True, BLACK)
+        back_text_rect = back_text.get_rect(center=back_button_rect.center)
+        window.blit(back_text, back_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'game_button_rects'):
+            draw_board.game_button_rects = {}
+        draw_board.game_button_rects["back"] = back_button_rect
+    
+    # Back button for GAME state (practice mode) - 最后绘制，确保显示在最上层，放在左下角
+    if state == "GAME" and game_mode == 'practice':
+        button_font = pygame.font.Font(None, 32)
+        # 左下角位置：距离左边50，距离底部50
+        back_button_rect = pygame.Rect(50, window_size + OFFSET_Y - 50, 100, 40)
+        # 先绘制一个半透明的背景，确保按钮可见
+        button_bg = pygame.Surface((100, 40), pygame.SRCALPHA)
+        button_bg.fill((255, 255, 255, 240))  # 半透明白色背景
+        window.blit(button_bg, back_button_rect)
+        # 根据鼠标悬停状态改变颜色
+        if menu_hovered == "back":
+            pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, back_button_rect)
+        pygame.draw.rect(window, BLACK, back_button_rect, 3)  # 加粗边框
+        back_text = button_font.render("Back", True, BLACK)
+        back_text_rect = back_text.get_rect(center=back_button_rect.center)
+        window.blit(back_text, back_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'practice_button_rects'):
+            draw_board.practice_button_rects = {}
+        draw_board.practice_button_rects["back"] = back_button_rect
+    
+    # Back button for END state - 最后绘制，确保显示在最上层，放在左下角
+    if state == "END":
+        button_font = pygame.font.Font(None, 32)
+        # 左下角位置：距离左边50，距离底部50
+        back_button_rect = pygame.Rect(50, window_size + OFFSET_Y - 50, 100, 40)
+        # 先绘制一个半透明的背景，确保按钮可见
+        button_bg = pygame.Surface((100, 40), pygame.SRCALPHA)
+        button_bg.fill((255, 255, 255, 240))  # 半透明白色背景
+        window.blit(button_bg, back_button_rect)
+        # 根据鼠标悬停状态改变颜色
+        if menu_hovered == "back":
+            pygame.draw.rect(window, LIGHT_YELLOW, back_button_rect)
+        else:
+            pygame.draw.rect(window, WHITE, back_button_rect)
+        pygame.draw.rect(window, BLACK, back_button_rect, 3)  # 加粗边框
         back_text = button_font.render("Back", True, BLACK)
         back_text_rect = back_text.get_rect(center=back_button_rect.center)
         window.blit(back_text, back_text_rect)
@@ -3024,10 +4395,153 @@ def draw_board():
         if not hasattr(draw_board, 'end_button_rects'):
             draw_board.end_button_rects = {}
         draw_board.end_button_rects["back"] = back_button_rect
-
-    # 绘制关卡提示信息（仅在practice模式下）
-    if game_mode == 'practice':
-        draw_level_hint(window)
+    
+    # 绘制确认退出对话框（GAME状态 - play模式）
+    if state == "GAME" and game_mode == 'play' and confirm_exit_game:
+        # 创建半透明背景
+        overlay = pygame.Surface((window.get_width(), window.get_height()), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 128))  # 半透明黑色
+        window.blit(overlay, (0, 0))
+        
+        # 对话框背景
+        dialog_width = 400
+        dialog_height = 150
+        dialog_x = (window.get_width() - dialog_width) // 2
+        dialog_y = (window.get_height() - dialog_height) // 2
+        dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_width, dialog_height)
+        pygame.draw.rect(window, WHITE, dialog_rect)
+        pygame.draw.rect(window, BLACK, dialog_rect, 3)
+        
+        # 提示文本
+        font = pygame.font.Font(None, 32)
+        text = font.render("Exit game?", True, BLACK)
+        text_rect = text.get_rect(center=(dialog_x + dialog_width // 2, dialog_y + 40))
+        window.blit(text, text_rect)
+        
+        # Yes按钮
+        yes_rect = pygame.Rect(dialog_x + 80, dialog_y + 90, 100, 40)
+        if menu_hovered == "confirm_exit_yes":
+            pygame.draw.rect(window, (200, 0, 0), yes_rect)
+        else:
+            pygame.draw.rect(window, RED, yes_rect)
+        pygame.draw.rect(window, BLACK, yes_rect, 2)
+        yes_text = font.render("Yes", True, WHITE)
+        yes_text_rect = yes_text.get_rect(center=yes_rect.center)
+        window.blit(yes_text, yes_text_rect)
+        
+        # No按钮
+        no_rect = pygame.Rect(dialog_x + 220, dialog_y + 90, 100, 40)
+        if menu_hovered == "confirm_exit_no":
+            pygame.draw.rect(window, LIGHT_YELLOW, no_rect)
+        else:
+            pygame.draw.rect(window, WHITE, no_rect)
+        pygame.draw.rect(window, BLACK, no_rect, 2)
+        no_text = font.render("No", True, BLACK)
+        no_text_rect = no_text.get_rect(center=no_rect.center)
+        window.blit(no_text, no_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'confirm_dialog_rects'):
+            draw_board.confirm_dialog_rects = {}
+        draw_board.confirm_dialog_rects["confirm_exit_yes"] = yes_rect
+        draw_board.confirm_dialog_rects["confirm_exit_no"] = no_rect
+    
+    # 绘制确认退出对话框（GAME状态 - practice模式）
+    if state == "GAME" and game_mode == 'practice' and confirm_exit_game:
+        # 创建半透明背景
+        overlay = pygame.Surface((window.get_width(), window.get_height()), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 128))  # 半透明黑色
+        window.blit(overlay, (0, 0))
+        
+        # 对话框背景
+        dialog_width = 400
+        dialog_height = 150
+        dialog_x = (window.get_width() - dialog_width) // 2
+        dialog_y = (window.get_height() - dialog_height) // 2
+        dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_width, dialog_height)
+        pygame.draw.rect(window, WHITE, dialog_rect)
+        pygame.draw.rect(window, BLACK, dialog_rect, 3)
+        
+        # 提示文本
+        font = pygame.font.Font(None, 32)
+        text = font.render("Exit level?", True, BLACK)
+        text_rect = text.get_rect(center=(dialog_x + dialog_width // 2, dialog_y + 40))
+        window.blit(text, text_rect)
+        
+        # Yes按钮
+        yes_rect = pygame.Rect(dialog_x + 80, dialog_y + 90, 100, 40)
+        if menu_hovered == "confirm_exit_yes":
+            pygame.draw.rect(window, (200, 0, 0), yes_rect)
+        else:
+            pygame.draw.rect(window, RED, yes_rect)
+        pygame.draw.rect(window, BLACK, yes_rect, 2)
+        yes_text = font.render("Yes", True, WHITE)
+        yes_text_rect = yes_text.get_rect(center=yes_rect.center)
+        window.blit(yes_text, yes_text_rect)
+        
+        # No按钮
+        no_rect = pygame.Rect(dialog_x + 220, dialog_y + 90, 100, 40)
+        if menu_hovered == "confirm_exit_no":
+            pygame.draw.rect(window, LIGHT_YELLOW, no_rect)
+        else:
+            pygame.draw.rect(window, WHITE, no_rect)
+        pygame.draw.rect(window, BLACK, no_rect, 2)
+        no_text = font.render("No", True, BLACK)
+        no_text_rect = no_text.get_rect(center=no_rect.center)
+        window.blit(no_text, no_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'confirm_dialog_rects'):
+            draw_board.confirm_dialog_rects = {}
+        draw_board.confirm_dialog_rects["confirm_exit_yes"] = yes_rect
+        draw_board.confirm_dialog_rects["confirm_exit_no"] = no_rect
+        # 创建半透明背景
+        overlay = pygame.Surface((window.get_width(), window.get_height()), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 128))  # 半透明黑色
+        window.blit(overlay, (0, 0))
+        
+        # 对话框背景
+        dialog_width = 400
+        dialog_height = 150
+        dialog_x = (window.get_width() - dialog_width) // 2
+        dialog_y = (window.get_height() - dialog_height) // 2
+        dialog_rect = pygame.Rect(dialog_x, dialog_y, dialog_width, dialog_height)
+        pygame.draw.rect(window, WHITE, dialog_rect)
+        pygame.draw.rect(window, BLACK, dialog_rect, 3)
+        
+        # 提示文本
+        font = pygame.font.Font(None, 32)
+        text = font.render("Exit game?", True, BLACK)
+        text_rect = text.get_rect(center=(dialog_x + dialog_width // 2, dialog_y + 40))
+        window.blit(text, text_rect)
+        
+        # Yes按钮
+        yes_rect = pygame.Rect(dialog_x + 80, dialog_y + 90, 100, 40)
+        if menu_hovered == "confirm_exit_yes":
+            pygame.draw.rect(window, (200, 0, 0), yes_rect)
+        else:
+            pygame.draw.rect(window, RED, yes_rect)
+        pygame.draw.rect(window, BLACK, yes_rect, 2)
+        yes_text = font.render("Yes", True, WHITE)
+        yes_text_rect = yes_text.get_rect(center=yes_rect.center)
+        window.blit(yes_text, yes_text_rect)
+        
+        # No按钮
+        no_rect = pygame.Rect(dialog_x + 220, dialog_y + 90, 100, 40)
+        if menu_hovered == "confirm_exit_no":
+            pygame.draw.rect(window, LIGHT_YELLOW, no_rect)
+        else:
+            pygame.draw.rect(window, WHITE, no_rect)
+        pygame.draw.rect(window, BLACK, no_rect, 2)
+        no_text = font.render("No", True, BLACK)
+        no_text_rect = no_text.get_rect(center=no_rect.center)
+        window.blit(no_text, no_text_rect)
+        
+        # 存储按钮区域用于点击检测
+        if not hasattr(draw_board, 'confirm_dialog_rects'):
+            draw_board.confirm_dialog_rects = {}
+        draw_board.confirm_dialog_rects["confirm_exit_yes"] = yes_rect
+        draw_board.confirm_dialog_rects["confirm_exit_no"] = no_rect
 
     # print(get_line_coordinates(14, 10, point_map))
 
@@ -3035,11 +4549,77 @@ def draw_board():
 
 
 def main():
-    global selected_piece, valid_moves, current_player, selected_numbers, operation, calculation_result, board_locked, selected_gray_point, formula_text, hovered_button, number_res, color_locked, continuous_span, paths, expected_result, continuous_span_line, state, winner, god_mode, menu_hovered, game_mode, replay_playing, replay_step, formula_res, renaming_file, rename_input, dragging_piece, available_pieces, custom_setup_pieces, BLUE_PIECES, RED_PIECES, hint_box_pos, hint_box_dragging, hint_box_offset, hint_box_rect, replay_last_update
-    global net_session, local_side, replay_page, deleting_file
+    global selected_piece, valid_moves, current_player, selected_numbers, operation, calculation_result, board_locked, selected_gray_point, formula_text, hovered_button, number_res, color_locked, continuous_span, paths, expected_result, continuous_span_line, state, winner, god_mode, menu_hovered, game_mode, replay_playing, replay_step, formula_res, renaming_file, rename_input, dragging_piece, available_pieces, custom_setup_pieces, BLUE_PIECES, RED_PIECES, hint_box_pos, hint_box_dragging, hint_box_offset, hint_box_rect, replay_last_update, demo_mode, demo_auto_playing, demo_paused, current_level
+    global net_session, local_side, replay_page, deleting_file, confirm_exit_game, hint_box_collapsed, show_first_level_tip, show_level3_span_tip, level3_tip_step, selected_cursor_filename, cursor_selection_mode
+    global current_level, selected_cursor_filename, custom_cursor_image
+    global demo_speed_levels, demo_speed_index, demo_speed, demo_last_step_time
     
     pygame.init()
     clock = pygame.time.Clock()
+    
+    # 隐藏系统鼠标，使用自定义鼠标
+    pygame.mouse.set_visible(False)
+    
+    # 加载自定义鼠标指针图片（从custom_cursor文件夹）
+    global custom_cursor_image, selected_cursor_filename
+    custom_cursor_image = None
+    try:
+        # 获取custom_cursor文件夹路径
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        cursor_dir = os.path.join(base_dir, 'custom_cursor')
+        
+        # 加载保存的配置
+        config_file = os.path.join(base_dir, 'cursor_config.json')
+        selected_cursor_filename = None
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                    selected_cursor_filename = config.get('selected_cursor')
+            except:
+                pass
+        
+        if os.path.exists(cursor_dir):
+            # 查找所有custom_n.png格式的图片
+            cursor_files = []
+            for filename in os.listdir(cursor_dir):
+                if filename.startswith('custom_') and filename.endswith('.png'):
+                    try:
+                        # 提取数字
+                        num_str = filename[7:-4]  # 去掉"custom_"和".png"
+                        num = int(num_str)
+                        cursor_files.append((num, filename))
+                    except:
+                        continue
+            
+            if cursor_files:
+                # 按数字排序
+                cursor_files.sort(key=lambda x: x[0])
+                
+                # 如果用户选择了鼠标指针，使用选择的；否则使用第一个
+                if selected_cursor_filename and any(f[1] == selected_cursor_filename for f in cursor_files):
+                    cursor_filename = selected_cursor_filename
+                else:
+                    cursor_filename = cursor_files[0][1]
+                    # 保存默认选择
+                    selected_cursor_filename = cursor_filename
+                    try:
+                        with open(config_file, 'w') as f:
+                            json.dump({'selected_cursor': cursor_filename}, f)
+                    except:
+                        pass
+                
+                cursor_path = os.path.join(cursor_dir, cursor_filename)
+                custom_cursor_image = pygame.image.load(cursor_path)
+                # 如果图片太大，可以缩放
+                if custom_cursor_image.get_width() > 50 or custom_cursor_image.get_height() > 50:
+                    scale = min(50 / custom_cursor_image.get_width(), 50 / custom_cursor_image.get_height())
+                    new_width = int(custom_cursor_image.get_width() * scale)
+                    new_height = int(custom_cursor_image.get_height() * scale)
+                    custom_cursor_image = pygame.transform.scale(custom_cursor_image, (new_width, new_height))
+    except Exception as e:
+        print(f"Error loading custom cursor: {e}")
+        custom_cursor_image = None  # 如果加载失败，使用默认绘制
     
     # 初始化游戏记录
     init_game_record()
@@ -3058,12 +4638,35 @@ def main():
                 sys.exit()
             
             if state == "MENU":
+                # 确保退出确认对话框状态被重置
+                if confirm_exit_game:
+                    confirm_exit_game = False
+                
                 # 处理菜单界面的鼠标移动
                 if event.type == pygame.MOUSEMOTION:
-                    menu_hovered = get_menu_button_at_pos(event.pos)
+                    if game_mode == 'custom':
+                        # 处理鼠标指针选择界面的悬停
+                        menu_hovered = None
+                        if hasattr(draw_cursor_selection, 'button_rects'):
+                            mouse_pos = event.pos
+                            if 'back' in draw_cursor_selection.button_rects and draw_cursor_selection.button_rects['back'].collidepoint(mouse_pos):
+                                menu_hovered = "back_cursor"
+                            else:
+                                for key, rect in draw_cursor_selection.button_rects.items():
+                                    if key.startswith('cursor_') and rect.collidepoint(mouse_pos):
+                                        menu_hovered = key
+                                        break
+                    else:
+                        menu_hovered = get_menu_button_at_pos(event.pos)
                 
                 # 处理键盘输入（用于重命名）
                 elif event.type == pygame.KEYDOWN:
+                    # 处理C键进入custom setup
+                    if event.key == pygame.K_c and state == "MENU" and game_mode is None:
+                        state = "CUSTOM_SETUP"
+                        game_mode = 'custom setup'
+                        continue
+                    
                     if renaming_file:
                         if event.key == pygame.K_RETURN:  # 回车确认
                             if rename_input.strip():
@@ -3085,22 +4688,73 @@ def main():
                 # 处理菜单界面的点击
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:  # 左键点击
-                        clicked_button = get_menu_button_at_pos(event.pos)
+                        # 在custom模式下，检查draw_cursor_selection的按钮
+                        if game_mode == 'custom':
+                            clicked_button = None
+                            if hasattr(draw_cursor_selection, 'button_rects'):
+                                mouse_pos = event.pos
+                                for key, rect in draw_cursor_selection.button_rects.items():
+                                    if rect.collidepoint(mouse_pos):
+                                        clicked_button = key
+                                        break
+                        else:
+                            clicked_button = get_menu_button_at_pos(event.pos)
                         
                         if clicked_button:
-                            if clicked_button == "back":
-                                game_mode = None
-                                replay_files.clear()
-                                renaming_file = None
-                                rename_input = ""
-                                # 清理 LAN 会话
-                                if 'net_session' in globals() and net_session:
-                                    try:
-                                        net_session.close()
-                                    except Exception:
-                                        pass
-                                    net_session = None
-                                    local_side = None
+                            if clicked_button == "back" or clicked_button == "back_cursor":
+                                # 从鼠标指针选择界面或其他界面返回
+                                if game_mode == 'custom':
+                                    game_mode = None
+                                else:
+                                    game_mode = None
+                                    replay_files.clear()
+                                    renaming_file = None
+                                    rename_input = ""
+                                    # 清理 LAN 会话
+                                    if 'net_session' in globals() and net_session:
+                                        try:
+                                            net_session.close()
+                                        except Exception:
+                                            pass
+                                        net_session = None
+                                        local_side = None
+                            elif clicked_button.startswith("cursor_"):
+                                # 选择鼠标指针
+                                if game_mode == 'custom':
+                                    cursor_index = int(clicked_button.split("_")[1])
+                                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                                    cursor_dir = os.path.join(base_dir, 'custom_cursor')
+                                    
+                                    if os.path.exists(cursor_dir):
+                                        cursor_files = []
+                                        for filename in os.listdir(cursor_dir):
+                                            if filename.startswith('custom_') and filename.endswith('.png'):
+                                                try:
+                                                    num_str = filename[7:-4]
+                                                    num = int(num_str)
+                                                    cursor_files.append((num, filename))
+                                                except:
+                                                    continue
+                                        
+                                        cursor_files.sort(key=lambda x: x[0])
+                                        if cursor_index < len(cursor_files):
+                                            selected_cursor_filename = cursor_files[cursor_index][1]
+                                            # 保存选择
+                                            config_file = os.path.join(base_dir, 'cursor_config.json')
+                                            try:
+                                                with open(config_file, 'w') as f:
+                                                    json.dump({'selected_cursor': selected_cursor_filename}, f)
+                                                # 重新加载鼠标指针
+                                                cursor_path = os.path.join(cursor_dir, selected_cursor_filename)
+                                                custom_cursor_image = pygame.image.load(cursor_path)
+                                                if custom_cursor_image.get_width() > 50 or custom_cursor_image.get_height() > 50:
+                                                    scale = min(50 / custom_cursor_image.get_width(), 50 / custom_cursor_image.get_height())
+                                                    new_width = int(custom_cursor_image.get_width() * scale)
+                                                    new_height = int(custom_cursor_image.get_height() * scale)
+                                                    custom_cursor_image = pygame.transform.scale(custom_cursor_image, (new_width, new_height))
+                                            except Exception as e:
+                                                print(f"Error saving cursor selection: {e}")
+                                            # 保持在custom界面，不返回主菜单
                             elif clicked_button.startswith("level_"):
                                 if game_mode == 'practice':
                                     level_id = get_level_button_at_pos(event.pos)
@@ -3124,6 +4778,7 @@ def main():
                                         loaded_positions = custom_setup.load_custom_setup_file(filename)
                                         if loaded_positions:
                                             BLUE_PIECES, RED_PIECES = loaded_positions
+                                            mark_board_changed()
                                             state = "GAME"
                                             game_mode = 'practice'
                                             # 重置游戏状态
@@ -3243,6 +4898,7 @@ def main():
                                         8: [1, 9],      # 第2列第1个点
                                         9: [1, 11]      # 第2列第2个点
                                     }
+                                    mark_board_changed()
                                     state = "GAME"
                                     init_game_record()
                                     game_mode = 'play'
@@ -3253,6 +4909,9 @@ def main():
                                 elif chosen == 'practice':
                                     # 修改：保持在菜单状态，显示自定义棋谱选择
                                     game_mode = 'practice'
+                                elif chosen == 'custom':
+                                    # 进入鼠标指针选择界面
+                                    game_mode = 'custom'
                                 elif chosen == 'custom setup':
                                     state = "CUSTOM_SETUP"
                                     game_mode = 'custom setup'
@@ -3596,6 +5255,207 @@ def main():
                 continue
             
             elif state == "GAME":
+                # 处理鼠标移动事件（悬停检测）
+                if event.type == pygame.MOUSEMOTION:
+                    mouse_pos = pygame.mouse.get_pos()
+                    menu_hovered = None
+                    
+                    # 如果显示第一关提示弹窗，检查弹窗按钮悬停
+                    if show_first_level_tip and hasattr(draw_board, 'first_tip_rects'):
+                        if 'close' in draw_board.first_tip_rects and draw_board.first_tip_rects['close'].collidepoint(mouse_pos):
+                            menu_hovered = "close_first_tip"
+                        elif 'ok' in draw_board.first_tip_rects and draw_board.first_tip_rects['ok'].collidepoint(mouse_pos):
+                            menu_hovered = "ok_first_tip"
+                    # 如果显示第三关提示弹窗，检查弹窗按钮悬停
+                    elif show_level3_span_tip and hasattr(draw_board, 'level3_tip_rects'):
+                        if 'close' in draw_board.level3_tip_rects and draw_board.level3_tip_rects['close'].collidepoint(mouse_pos):
+                            menu_hovered = "close_level3_tip"
+                        elif 'next' in draw_board.level3_tip_rects and draw_board.level3_tip_rects['next'].collidepoint(mouse_pos):
+                            menu_hovered = "next_level3_tip"
+                    # 如果显示确认对话框，检查对话框按钮悬停
+                    elif confirm_exit_game and hasattr(draw_board, 'confirm_dialog_rects'):
+                        if 'confirm_exit_yes' in draw_board.confirm_dialog_rects:
+                            if draw_board.confirm_dialog_rects['confirm_exit_yes'].collidepoint(mouse_pos):
+                                menu_hovered = "confirm_exit_yes"
+                            elif draw_board.confirm_dialog_rects['confirm_exit_no'].collidepoint(mouse_pos):
+                                menu_hovered = "confirm_exit_no"
+                    # 检查提示窗口按钮悬停（只在practice模式下且提示窗口存在时）
+                    elif game_mode == 'practice' and current_level:
+                        # 先调用draw_level_hint确保button_rects被创建（仅在鼠标移动时，性能影响较小）
+                        draw_level_hint(window)
+                        if hasattr(draw_level_hint, 'button_rects'):
+                            if 'demo' in draw_level_hint.button_rects and draw_level_hint.button_rects['demo'].collidepoint(mouse_pos):
+                                menu_hovered = "demo_button"
+                            elif 'collapse' in draw_level_hint.button_rects and draw_level_hint.button_rects['collapse'].collidepoint(mouse_pos):
+                                menu_hovered = "hint_collapse"
+                            elif 'expand' in draw_level_hint.button_rects and draw_level_hint.button_rects['expand'].collidepoint(mouse_pos):
+                                menu_hovered = "hint_expand"
+                            else:
+                                menu_hovered = None
+                    # 否则检查back按钮悬停
+                    elif game_mode == 'play' and hasattr(draw_board, 'game_button_rects') and 'back' in draw_board.game_button_rects:
+                        if draw_board.game_button_rects['back'].collidepoint(mouse_pos):
+                            menu_hovered = "back"
+                    elif game_mode == 'practice' and hasattr(draw_board, 'practice_button_rects') and 'back' in draw_board.practice_button_rects:
+                        if draw_board.practice_button_rects['back'].collidepoint(mouse_pos):
+                            menu_hovered = "back"
+                
+                # 处理鼠标点击事件
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 1:  # 左键点击
+                        mouse_pos = pygame.mouse.get_pos()
+                        
+                        # 演示模式下：允许 Pause/Speed/Stop，其余点击忽略（避免用户干扰演示流程）
+                        if demo_mode:
+                            # 1) 右下角按钮（draw_calculation_area 中创建）
+                            if hasattr(draw_board, 'demo_pause_button_rect') and draw_board.demo_pause_button_rect:
+                                if draw_board.demo_pause_button_rect.collidepoint(mouse_pos):
+                                    demo_paused = not demo_paused
+                                    # 立刻刷新计时，避免恢复时瞬间连跳多步
+                                    demo_last_step_time = time.time()
+                                    continue
+                            if hasattr(draw_board, 'demo_speed_button_rect') and draw_board.demo_speed_button_rect:
+                                if draw_board.demo_speed_button_rect.collidepoint(mouse_pos):
+                                    demo_speed_index = (demo_speed_index + 1) % len(demo_speed_levels)
+                                    demo_speed = demo_speed_levels[demo_speed_index]
+                                    demo_last_step_time = time.time()
+                                    continue
+                            if hasattr(draw_board, 'demo_button_rect') and draw_board.demo_button_rect:
+                                if draw_board.demo_button_rect.collidepoint(mouse_pos):
+                                    stop_demo()
+                                    continue
+
+                            # 2) 提示框内 Demo 按钮（兼容旧布局）
+                            if game_mode == 'practice' and current_level:
+                                draw_level_hint(window)
+                                if hasattr(draw_level_hint, 'button_rects') and draw_level_hint.button_rects:
+                                    if 'demo' in draw_level_hint.button_rects:
+                                        demo_rect = draw_level_hint.button_rects['demo']
+                                        if demo_rect.collidepoint(mouse_pos):
+                                            stop_demo()
+                                            continue
+                            # 演示模式下忽略其他所有点击（但保留上述按钮权限）
+                            continue
+                        
+                        # 处理第一关提示弹窗的关闭
+                        if show_first_level_tip and hasattr(draw_board, 'first_tip_rects'):
+                            if 'close' in draw_board.first_tip_rects and draw_board.first_tip_rects['close'].collidepoint(mouse_pos):
+                                show_first_level_tip = False
+                                continue
+                            elif 'ok' in draw_board.first_tip_rects and draw_board.first_tip_rects['ok'].collidepoint(mouse_pos):
+                                show_first_level_tip = False
+                                continue
+                            # 如果点击了弹窗外的区域，关闭弹窗
+                            tip_clicked = False
+                            if 'close' in draw_board.first_tip_rects and draw_board.first_tip_rects['close'].collidepoint(mouse_pos):
+                                tip_clicked = True
+                            elif 'ok' in draw_board.first_tip_rects and draw_board.first_tip_rects['ok'].collidepoint(mouse_pos):
+                                tip_clicked = True
+                            if not tip_clicked:
+                                # 检查是否点击在弹窗内
+                                dialog_rect = pygame.Rect((window.get_width() - 450) // 2, (window.get_height() - 250) // 2, 450, 250)
+                                if not dialog_rect.collidepoint(mouse_pos):
+                                    # 点击弹窗外，关闭弹窗
+                                    show_first_level_tip = False
+                                    continue
+                        # 处理第三关提示弹窗
+                        elif show_level3_span_tip and hasattr(draw_board, 'level3_tip_rects'):
+                            if 'close' in draw_board.level3_tip_rects and draw_board.level3_tip_rects['close'].collidepoint(mouse_pos):
+                                show_level3_span_tip = False
+                                continue
+                            elif 'next' in draw_board.level3_tip_rects and draw_board.level3_tip_rects['next'].collidepoint(mouse_pos):
+                                if level3_tip_step < 3:
+                                    level3_tip_step += 1
+                                else:
+                                    show_level3_span_tip = False
+                                continue
+                            # 如果点击了弹窗外的区域，关闭弹窗
+                            tip_clicked = False
+                            if 'close' in draw_board.level3_tip_rects and draw_board.level3_tip_rects['close'].collidepoint(mouse_pos):
+                                tip_clicked = True
+                            elif 'next' in draw_board.level3_tip_rects and draw_board.level3_tip_rects['next'].collidepoint(mouse_pos):
+                                tip_clicked = True
+                            if not tip_clicked:
+                                # 检查是否点击在弹窗内
+                                dialog_rect = pygame.Rect((window.get_width() - 500) // 2, (window.get_height() - 200) // 2, 500, 200)
+                                if not dialog_rect.collidepoint(mouse_pos):
+                                    # 点击弹窗外，关闭弹窗
+                                    show_level3_span_tip = False
+                                    continue
+                        
+                        # 处理Demo按钮（在Color Locked位置，优先检测）
+                        if game_mode == 'practice' and current_level and hasattr(draw_board, 'demo_button_rect') and draw_board.demo_button_rect:
+                            if draw_board.demo_button_rect.collidepoint(mouse_pos):
+                                if demo_mode:
+                                    stop_demo()
+                                else:
+                                    start_demo()
+                                continue
+                        
+                        # 处理提示窗口的收起/展开按钮（优先检测，避免被其他逻辑拦截）
+                        if game_mode == 'practice' and current_level:
+                            # 先调用draw_level_hint确保button_rects被创建
+                            draw_level_hint(window)
+                            if hasattr(draw_level_hint, 'button_rects') and draw_level_hint.button_rects:
+                                # 根据当前状态检查对应的按钮
+                                if hint_box_collapsed:
+                                    # 收起状态下，检查展开按钮
+                                    if 'expand' in draw_level_hint.button_rects:
+                                        expand_rect = draw_level_hint.button_rects['expand']
+                                        if expand_rect.collidepoint(mouse_pos):
+                                            hint_box_collapsed = False
+                                            continue
+                                else:
+                                    # 展开状态下，检查收起按钮
+                                    if 'collapse' in draw_level_hint.button_rects:
+                                        collapse_rect = draw_level_hint.button_rects['collapse']
+                                        if collapse_rect.collidepoint(mouse_pos):
+                                            hint_box_collapsed = True
+                                            continue
+                        
+                        # 如果显示确认对话框，处理对话框按钮点击
+                        if confirm_exit_game and hasattr(draw_board, 'confirm_dialog_rects'):
+                            if 'confirm_exit_yes' in draw_board.confirm_dialog_rects:
+                                if draw_board.confirm_dialog_rects['confirm_exit_yes'].collidepoint(mouse_pos):
+                                    # 确认退出
+                                    if game_mode == 'play':
+                                        # play模式：保存记录并返回主菜单
+                                        if game_record and not try_mode:
+                                            save_game_record()
+                                        game_mode = None
+                                    elif game_mode == 'practice':
+                                        # practice模式：返回关卡选择界面
+                                        game_mode = "practice"
+                                        current_level = None
+                                    confirm_exit_game = False
+                                    state = "MENU"
+                                    continue
+                                elif draw_board.confirm_dialog_rects['confirm_exit_no'].collidepoint(mouse_pos):
+                                    # 取消退出
+                                    confirm_exit_game = False
+                                    continue
+                            # 如果点击了对话框外的区域，关闭对话框
+                            dialog_clicked = False
+                            if 'confirm_exit_yes' in draw_board.confirm_dialog_rects:
+                                if (draw_board.confirm_dialog_rects['confirm_exit_yes'].collidepoint(mouse_pos) or
+                                    draw_board.confirm_dialog_rects['confirm_exit_no'].collidepoint(mouse_pos)):
+                                    dialog_clicked = True
+                            if not dialog_clicked:
+                                # 点击对话框外，关闭对话框
+                                confirm_exit_game = False
+                                continue
+                        # 否则检查back按钮点击
+                        elif game_mode == 'play' and hasattr(draw_board, 'game_button_rects') and 'back' in draw_board.game_button_rects:
+                            if draw_board.game_button_rects['back'].collidepoint(mouse_pos):
+                                # 显示确认对话框
+                                confirm_exit_game = True
+                                continue
+                        elif game_mode == 'practice' and hasattr(draw_board, 'practice_button_rects') and 'back' in draw_board.practice_button_rects:
+                            if draw_board.practice_button_rects['back'].collidepoint(mouse_pos):
+                                # 显示确认对话框
+                                confirm_exit_game = True
+                                continue
+                
                 # 只在非练习模式下进行胜负判定
                 if game_mode != 'practice':
                     if check_win() == "blue":
@@ -3635,8 +5495,8 @@ def main():
                             selected_piece = None
                             state = 'GAME'
 
-            # 处理鼠标移动事件
-            if event.type == pygame.MOUSEMOTION:
+            # 处理鼠标移动事件（如果不在确认对话框中）
+            if event.type == pygame.MOUSEMOTION and not (state == "GAME" and confirm_exit_game and (game_mode == 'play' or game_mode == 'practice')):
                 mouse_pos = pygame.mouse.get_pos()
                 
                 # Handle hint box dragging
@@ -3836,12 +5696,53 @@ def main():
                 if event.button == 1:  # 左键点击
                     mouse_pos = pygame.mouse.get_pos()
                     
-                    # Check if clicking on hint box for dragging
-                    if (game_mode == 'practice' and 'hint_box_rect' in globals() and 
-                        hint_box_rect.collidepoint(mouse_pos)):
-                        hint_box_dragging = True
-                        hint_box_offset = (mouse_pos[0] - hint_box_pos[0], mouse_pos[1] - hint_box_pos[1])
-                        continue
+                    # 处理第一关提示弹窗的关闭
+                    if show_first_level_tip and hasattr(draw_board, 'first_tip_rects'):
+                        if 'close' in draw_board.first_tip_rects and draw_board.first_tip_rects['close'].collidepoint(mouse_pos):
+                            show_first_level_tip = False
+                            continue
+                        elif 'ok' in draw_board.first_tip_rects and draw_board.first_tip_rects['ok'].collidepoint(mouse_pos):
+                            show_first_level_tip = False
+                            continue
+                    
+                    # 处理提示窗口的收起/展开按钮（优先检测，避免被其他逻辑拦截）
+                    if game_mode == 'practice' and current_level:
+                        # 先调用draw_level_hint确保button_rects被创建
+                        draw_level_hint(window)
+                        if hasattr(draw_level_hint, 'button_rects') and draw_level_hint.button_rects:
+                            # 根据当前状态检查对应的按钮
+                            if hint_box_collapsed:
+                                # 收起状态下，检查展开按钮
+                                if 'expand' in draw_level_hint.button_rects:
+                                    expand_rect = draw_level_hint.button_rects['expand']
+                                    if expand_rect.collidepoint(mouse_pos):
+                                        hint_box_collapsed = False
+                                        continue
+                            else:
+                                # 展开状态下，检查收起按钮
+                                if 'collapse' in draw_level_hint.button_rects:
+                                    collapse_rect = draw_level_hint.button_rects['collapse']
+                                    if collapse_rect.collidepoint(mouse_pos):
+                                        hint_box_collapsed = True
+                                        continue
+                    
+                    # Check if clicking on hint box for dragging (但不在收起/展开按钮上)
+                    # 注意：这个检测应该在展开按钮检测之后，避免干扰
+                    if game_mode == 'practice' and current_level:
+                        # 先调用draw_level_hint确保button_rects和hint_box_rect是最新的
+                        draw_level_hint(window)
+                        # 先检查是否点击在收起/展开按钮上（这些按钮的检测已经在上面处理了，这里只是防止拖动）
+                        button_clicked = False
+                        if hasattr(draw_level_hint, 'button_rects') and draw_level_hint.button_rects:
+                            if 'collapse' in draw_level_hint.button_rects and draw_level_hint.button_rects['collapse'].collidepoint(mouse_pos):
+                                button_clicked = True
+                            elif 'expand' in draw_level_hint.button_rects and draw_level_hint.button_rects['expand'].collidepoint(mouse_pos):
+                                button_clicked = True
+                        # 如果没有点击按钮，且点击在提示窗口内，则开始拖动
+                        if not button_clicked and 'hint_box_rect' in globals() and hint_box_rect and hint_box_rect.collidepoint(mouse_pos):
+                            hint_box_dragging = True
+                            hint_box_offset = (mouse_pos[0] - hint_box_pos[0], mouse_pos[1] - hint_box_pos[1])
+                            continue
                     
                     all_points, point_map, button_areas, potential_jumps, potential_jumps2 = draw_board()
                     
@@ -3878,6 +5779,7 @@ def main():
                             else:
                                 RED_PIECES[num][0], RED_PIECES[num][1] = target_pos
                                 current_player = 'blue'
+                            mark_board_changed()
                             selected_piece = None
                             red_points, blue_points = calculate_point()
                             print(f"red_points: {red_points}, blue_points: {blue_points}")
@@ -3979,22 +5881,50 @@ def main():
                         
                         # 检查是否点击了清除按钮
                         elif button_areas["clear_button"].collidepoint(mouse_pos):
-                            if len(number_res) != 0:
-                                if not continuous_span:
+                            if continuous_span:
+                                # 连跨模式下的特殊处理
+                                if formula_text:  # 如果formula不为空，仅清空并恢复这一行的数据
+                                    if len(number_res) > 0:
+                                        # 恢复当前行（最后一行）的数据
+                                        last_res = number_res[-1]
+                                        if last_res[0] < 0:  # 当行索引小于0时，加入整行
+                                            paths[0].append(last_res[1:])
+                                        else:
+                                            # 在对应行加入数字
+                                            row_idx = abs(last_res[0]) - 1
+                                            if row_idx < len(paths[0]):
+                                                for num in last_res[1:]:
+                                                    paths[0][row_idx].append(num)
+                                        number_res.pop()  # 只移除最后一行
+                                    formula_text = ""  # 清空formula
+                                    operation = None
+                                    calculation_result = None
+                                else:  # 如果formula为空，清空所有状态
+                                    if len(number_res) != 0:
+                                        for i in range(len(number_res)):
+                                            if number_res[i][0] < 0:  # 当行索引小于0时，加入整行
+                                                paths[0].append(number_res[i][1:])
+                                            else:
+                                                # 在对应行加入数字
+                                                row_idx = abs(number_res[i][0]) - 1
+                                                if row_idx < len(paths[0]):
+                                                    for num in number_res[i][1:]:
+                                                        paths[0][row_idx].append(num)
+                                        number_res = []
+                                    operation = None
+                                    calculation_result = None
+                                    expected_result = None
+                            else:
+                                # 单跨模式：保持原有逻辑
+                                if len(number_res) != 0:
                                     for i in range(len(number_res)):
                                         selected_numbers.append(number_res[i])
-                                else:
-                                    for i in range(len(number_res)):
-                                        if number_res[i][0] < 0:  # 当行索小于0时，加入整行
-                                            paths[0].append(number_res[i][1:])
-                                        else:
-                                            for num in number_res[i][1:]:  # 否则在对应行加入数字
-                                                paths[0][number_res[i][0] - 1].append(num)
-                                number_res = []
-                            operation = None
-                            calculation_result = None
-                            expected_result = None
-                            formula_text = ""
+                                    number_res = []
+                                operation = None
+                                calculation_result = None
+                                # 不清除expected_result，保留右上角的预期点数显示
+                                # expected_result = None
+                                formula_text = ""
                         
                         for rect in button_areas["number_buttons"]:
                             x, y, width, height, color, num, val = rect
@@ -4149,8 +6079,8 @@ def main():
                         if handled_control_click:
                             continue
                     
-                    # 如果棋盘已锁定或在回放模式，不允许进行棋盘操作
-                    if board_locked:
+                    # 如果棋盘已锁定或在回放模式，不允许进行棋盘操作（demo模式下允许点击棋子显示提示）
+                    if board_locked and not demo_mode:
                         continue
                     
                     # 优先检查绿圈点击（有效移动位置）
@@ -4194,6 +6124,10 @@ def main():
                                 continuous_span = False
                                 expected_result = selected_piece[1]  # 预期结果设置为棋子本身的数值
                                 selected_numbers = get_numbers(selected_piece[2], selected_gray_point, point_map)
+                                # 第三关触发单跨选择后，显示提示弹窗
+                                if current_level == 3 and not show_level3_span_tip:
+                                    show_level3_span_tip = True
+                                    level3_tip_step = 0
                             else:
                                 # 有多条路径，采用紫色判定逻辑并重置参数
                                 continuous_span = True
@@ -4230,24 +6164,27 @@ def main():
                     if clicked_gray_point:
                         continue
                     
-                    # 检查是否点击了棋子
-                    piece = get_piece_at_position(mouse_pos, point_map, BLUE_PIECES, RED_PIECES)
-                    if piece:
-                        piece_color, piece_number = piece[0], piece[1]
-                        # 在练习模式下检查是否可以移动该棋子
-                        if game_mode == "practice" and not can_move_piece(piece_color, piece_number):
-                            # 可以添加一个临时的错误提示或者忽略点击
-                            # 这里可以设置一个全局变量来显示错误信息
-                            pass  # 忽略无效的棋子选择
+                    # 检查是否点击了棋子（demo模式下允许选择棋子显示提示）
+                    if not demo_mode or (demo_mode and not demo_waiting_for_click):
+                        piece = get_piece_at_position(mouse_pos, point_map, BLUE_PIECES, RED_PIECES)
+                        if piece:
+                            piece_color, piece_number = piece[0], piece[1]
+                            # 在练习模式下检查是否可以移动该棋子
+                            if game_mode == "practice" and not can_move_piece(piece_color, piece_number):
+                                # 可以添加一个临时的错误提示或者忽略点击
+                                # 这里可以设置一个全局变量来显示错误信息
+                                pass  # 忽略无效的棋子选择
+                            else:
+                                # 正常的棋子选择逻辑
+                                # 如果点击的是棋子，同时更新选中棋子和计算版数字
+                                selected_piece = piece
+                                # 获取有效移动位置
+                                valid_moves = get_valid_moves(piece[2], point_map, BLUE_PIECES, RED_PIECES, all_points)
                         else:
-                            # 正常的棋子选择逻辑
-                            # 如果点击的是棋子，同时更新选中棋子和计算版数字
-                            selected_piece = piece
-                            # 获取有效移动位置
-                            valid_moves = get_valid_moves(piece[2], point_map, BLUE_PIECES, RED_PIECES, all_points)
-                    else:
-                        selected_piece = None
-                        valid_moves = []
+                            # demo模式下点击空白处不清除选择，保持提示显示
+                            if not demo_mode:
+                                selected_piece = None
+                                valid_moves = []
             
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:  # Left click release
@@ -4266,6 +6203,19 @@ def main():
             all_points, point_map, button_areas, potential_jumps, potential_jumps2 = draw_board()
         elif state == "LEVEL_COMPLETE":
             draw_level_complete()
+        
+        # 绘制自定义鼠标指针（最后绘制，确保显示在最上层）
+        if custom_cursor_image is not None:
+            mouse_pos = pygame.mouse.get_pos()
+            # 以鼠标位置为中心绘制图片
+            x, y = mouse_pos
+            cursor_rect = custom_cursor_image.get_rect(center=(x + 15,y + 15))
+            window.blit(custom_cursor_image, cursor_rect)
+        else:
+            # 如果图片未加载，绘制简单的默认鼠标指针
+            mouse_pos = pygame.mouse.get_pos()
+            pygame.draw.circle(window, BLACK, mouse_pos, 5)
+            pygame.draw.circle(window, WHITE, mouse_pos, 3)
             
         pygame.display.flip()
         clock.tick(60)

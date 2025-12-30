@@ -1,4 +1,5 @@
 {
+  "total_levels": 6,
   "levels": [
     {
       "id": 1,
@@ -6,7 +7,7 @@
       "file": "move.json",
       "title": "Level 1: Basic Movement",
       "description": "Learn how to move pieces. Move allows a piece to move to any adjacent cell.",
-      "objective": "Move the red piece to any adjacent position",
+      "objective": "Select red piece 6, click the red circle.\nMove: Move to any adjacent empty cell.",
       "target_piece": {
         "color": "red",
         "number": 6
@@ -23,7 +24,7 @@
       "file": "jump.json",
       "title": "Level 2: Jump Over Pieces",
       "description": "Jump allows a piece to jump over any adjacent piece. Help the blue piece escape from the red pieces' encirclement.",
-      "objective": "Move the blue piece out of the red pieces' encirclement",
+      "objective": "Select blue piece 0, use jump moves to escape.\nJump: Jump over adjacent piece to empty cell.",
       "target_piece": {
         "color": "blue",
         "number": 0
@@ -40,7 +41,7 @@
       "file": "span.json",
       "title": "Level 3: Span Calculation",
       "description": "Use span calculation to move pieces. Move red piece 8 to the right of red piece 9.",
-      "objective": "Move piece 8, complete the calculation so the result equals 8",
+      "objective": "Select red piece 8, click the red box (right of red 9).\n\nSingle Span Rule:\nCalculate spanned pieces using +, -, ×, or ÷ to equal the spanning piece's number.\n\nKey Points:\n• Empty spaces: unlimited\n• Landing: empty cell after last spanned piece\n• All spanned pieces used once\n• Spanning piece's number NOT used",
       "target_piece": {
         "color": "red",
         "number": 8
@@ -58,7 +59,7 @@
       "file": "continous_span.json",
       "title": "Level 4: Continuous Span Calculation",
       "description": "Use continuous span calculation. Move red piece 1 to the right of blue piece 6.",
-      "objective": "Calculate so that both paths have the same value",
+      "objective": "Select red piece 1, click the red box (right of blue 6).\n\nContinuous Span Rule:\nSpan over 2+ segments where each calculates to the SAME value. Trains convergent thinking.\n\nKey Points:\n• Spanning piece's number ≠ segment value\n• Landing point on same line as next segment\n• Segment sizes can differ\n• Empty spaces: unlimited\n• Segments can be on same or different lines",
       "target_piece": {
         "color": "red",
         "number": 1
@@ -68,6 +69,42 @@
         "piece": {"color": "red", "number": 1},
         "target_position": [9, 17],
         "equal_path_values": true
+      }
+    }
+    ,
+    {
+      "id": 5,
+      "name": "Game End",
+      "file": "custom_setup_20251104_094841.json",
+      "title": "Level 5: Game End",
+      "description": "Learn how the game ends. The game ends when one side's pieces all reach the opponent's camp.",
+      "objective": "Select blue piece 9, move to last cell of Red camp (left of Blue 8).\n\nScoring Rules:\nWhen one side's 10 pieces occupy all opponent's camp positions, that side can \"call stop\". Both sides then calculate scores.\n\nCalculation Method (Product-Sum):\nPiece number × Position number = Piece score. Sum all piece scores = Total score.\n\nExample: Piece 8 at position 4 = 8×4=32; Piece 6 at position 3 = 6×3=18; Total = 32+18=50.\n\nPerfect match (highest): 0×0+1×1+...+9×9 = 285 points.\nWorst match (lowest): 0×9+1×8+...+9×0 = 120 points.",
+      "target_piece": {
+        "color": "blue",
+        "number": 9
+      },
+      "win_condition": {
+        "type": "position",
+        "piece": {"color": "blue", "number": 9},
+        "target_position": [3, 7]
+      }
+    },
+    {
+      "id": 6,
+      "name": "Select Path",
+      "file": "custom_setup_20251225_172356.json",
+      "title": "Level 6: Move Blue 0",
+      "description": "Move the blue piece 0 to the target position (4, 10) in exactly 1 move.",
+      "objective": "Select blue piece 0, move it to position (4, 10) in exactly 1 move.\n\nYou must complete this in a single move. If you take more than 1 move, you fail.",
+      "target_piece": {
+        "color": "blue",
+        "number": 0
+      },
+      "max_moves": 1,
+      "win_condition": {
+        "type": "position",
+        "piece": {"color": "blue", "number": 0},
+        "target_position": [4, 10]
       }
     }
   ]

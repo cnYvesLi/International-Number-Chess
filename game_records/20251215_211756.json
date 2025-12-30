@@ -1,0 +1,138 @@
+{
+  "game_info": {
+    "start_time": "2025-12-15T21:17:56.048927",
+    "end_time": "2025-12-15T21:19:06.235852",
+    "total_moves": 8,
+    "winner": null
+  },
+  "moves": [
+    {
+      "move_number": 1,
+      "player": "blue",
+      "piece_number": 2,
+      "start_position": {
+        "col": 11,
+        "row": 9
+      },
+      "end_position": {
+        "col": 10,
+        "row": 10
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T21:17:58.859865",
+      "paths": null
+    },
+    {
+      "move_number": 2,
+      "player": "red",
+      "piece_number": 4,
+      "start_position": {
+        "col": 3,
+        "row": 13
+      },
+      "end_position": {
+        "col": 4,
+        "row": 12
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T21:18:00.332722",
+      "paths": null
+    },
+    {
+      "move_number": 3,
+      "player": "blue",
+      "piece_number": 2,
+      "start_position": {
+        "col": 10,
+        "row": 10
+      },
+      "end_position": {
+        "col": 9,
+        "row": 11
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T21:18:01.588263",
+      "paths": null
+    },
+    {
+      "move_number": 4,
+      "player": "red",
+      "piece_number": 2,
+      "start_position": {
+        "col": 3,
+        "row": 11
+      },
+      "end_position": {
+        "col": 4,
+        "row": 10
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T21:18:03.444405",
+      "paths": null
+    },
+    {
+      "move_number": 5,
+      "player": "blue",
+      "piece_number": 1,
+      "start_position": {
+        "col": 11,
+        "row": 13
+      },
+      "end_position": {
+        "col": 10,
+        "row": 12
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T21:18:05.060714",
+      "paths": null
+    },
+    {
+      "move_number": 6,
+      "player": "red",
+      "piece_number": 2,
+      "start_position": {
+        "col": 4,
+        "row": 10
+      },
+      "end_position": {
+        "col": 5,
+        "row": 9
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T21:18:06.365810",
+      "paths": null
+    },
+    {
+      "move_number": 7,
+      "player": "blue",
+      "piece_number": 4,
+      "start_position": {
+        "col": 11,
+        "row": 7
+      },
+      "end_position": {
+        "col": 10,
+        "row": 8
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T21:18:27.726782",
+      "paths": null
+    },
+    {
+      "move_number": 8,
+      "player": "red",
+      "piece_number": 3,
+      "start_position": {
+        "col": 3,
+        "row": 9
+      },
+      "end_position": {
+        "col": 4,
+        "row": 10
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T21:18:33.533430",
+      "paths": null
+    }
+  ]
+}

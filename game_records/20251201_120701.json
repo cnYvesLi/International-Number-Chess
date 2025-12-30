@@ -1,0 +1,87 @@
+{
+  "game_info": {
+    "start_time": "2025-12-01T12:07:01.282281",
+    "end_time": "2025-12-01T12:07:53.620292",
+    "total_moves": 4,
+    "winner": null
+  },
+  "moves": [
+    {
+      "move_number": 1,
+      "player": "blue",
+      "piece_number": 1,
+      "start_position": {
+        "col": 11,
+        "row": 13
+      },
+      "end_position": {
+        "col": 10,
+        "row": 12
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-01T12:07:07.131202",
+      "paths": null
+    },
+    {
+      "move_number": 2,
+      "player": "red",
+      "piece_number": 0,
+      "start_position": {
+        "col": 0,
+        "row": 10
+      },
+      "end_position": {
+        "col": 4,
+        "row": 6
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-01T12:07:13.409817",
+      "paths": [
+        8,
+        7,
+        1
+      ],
+      "formula": [
+        "8-7-1"
+      ]
+    },
+    {
+      "move_number": 3,
+      "player": "blue",
+      "piece_number": 3,
+      "start_position": {
+        "col": 11,
+        "row": 11
+      },
+      "end_position": {
+        "col": 9,
+        "row": 13
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-01T12:07:18.064575",
+      "paths": null
+    },
+    {
+      "move_number": 4,
+      "player": "red",
+      "piece_number": 9,
+      "start_position": {
+        "col": 1,
+        "row": 11
+      },
+      "end_position": {
+        "col": 4,
+        "row": 8
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-01T12:07:50.201216",
+      "paths": [
+        3,
+        6
+      ],
+      "formula": [
+        "3+6"
+      ]
+    }
+  ]
+}

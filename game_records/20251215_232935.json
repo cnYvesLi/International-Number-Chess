@@ -1,0 +1,42 @@
+{
+  "game_info": {
+    "start_time": "2025-12-15T23:29:35.731146",
+    "end_time": "2025-12-15T23:29:45.359415",
+    "total_moves": 2,
+    "winner": null
+  },
+  "moves": [
+    {
+      "move_number": 1,
+      "player": "blue",
+      "piece_number": 4,
+      "start_position": {
+        "col": 11,
+        "row": 7
+      },
+      "end_position": {
+        "col": 10,
+        "row": 6
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T23:29:38.172395",
+      "paths": null
+    },
+    {
+      "move_number": 2,
+      "player": "red",
+      "piece_number": 3,
+      "start_position": {
+        "col": 3,
+        "row": 9
+      },
+      "end_position": {
+        "col": 4,
+        "row": 8
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T23:29:40.124422",
+      "paths": null
+    }
+  ]
+}

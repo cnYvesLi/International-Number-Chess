@@ -1,0 +1,243 @@
+{
+  "game_info": {
+    "start_time": "2025-12-15T23:32:36.656508",
+    "end_time": "2025-12-15T23:38:19.876944",
+    "total_moves": 9,
+    "winner": null
+  },
+  "moves": [
+    {
+      "move_number": 1,
+      "player": "blue",
+      "piece_number": 3,
+      "start_position": {
+        "col": 11,
+        "row": 11
+      },
+      "end_position": {
+        "col": 10,
+        "row": 10
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T23:32:38.294519",
+      "paths": null
+    },
+    {
+      "move_number": 2,
+      "player": "red",
+      "piece_number": 4,
+      "start_position": {
+        "col": 3,
+        "row": 13
+      },
+      "end_position": {
+        "col": 4,
+        "row": 14
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T23:32:39.685629",
+      "paths": null
+    },
+    {
+      "move_number": 3,
+      "player": "blue",
+      "piece_number": 0,
+      "start_position": {
+        "col": 14,
+        "row": 10
+      },
+      "end_position": {
+        "col": 10,
+        "row": 6
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-15T23:32:48.983661",
+      "paths": [
+        9,
+        5,
+        4
+      ],
+      "formula": [
+        "9-5-4"
+      ]
+    },
+    {
+      "move_number": 4,
+      "player": "red",
+      "piece_number": 8,
+      "start_position": {
+        "col": 1,
+        "row": 9
+      },
+      "end_position": {
+        "col": 4,
+        "row": 16
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-15T23:32:57.592324",
+      "paths": [
+        [
+          -114514,
+          6,
+          2
+        ],
+        [
+          -1,
+          4
+        ]
+      ],
+      "formula": [
+        "6-2",
+        "4"
+      ]
+    },
+    {
+      "move_number": 5,
+      "player": "blue",
+      "piece_number": 4,
+      "start_position": {
+        "col": 11,
+        "row": 7
+      },
+      "end_position": {
+        "col": 10,
+        "row": 8
+      },
+      "move_type": "normal",
+      "timestamp": "2025-12-15T23:33:29.465440",
+      "paths": null
+    },
+    {
+      "move_number": 6,
+      "player": "red",
+      "piece_number": 6,
+      "start_position": {
+        "col": 2,
+        "row": 10
+      },
+      "end_position": {
+        "col": 4,
+        "row": 18
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-15T23:33:40.025045",
+      "paths": [
+        [
+          -114514,
+          2
+        ],
+        [
+          -1,
+          8,
+          4
+        ]
+      ],
+      "formula": [
+        "2",
+        "8÷4"
+      ]
+    },
+    {
+      "move_number": 7,
+      "player": "blue",
+      "piece_number": 8,
+      "start_position": {
+        "col": 13,
+        "row": 11
+      },
+      "end_position": {
+        "col": 10,
+        "row": 4
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-15T23:33:56.606305",
+      "paths": [
+        [
+          -114514,
+          7,
+          1
+        ],
+        [
+          -1,
+          4,
+          3,
+          0
+        ]
+      ],
+      "formula": [
+        "7×1",
+        "4+3+0"
+      ]
+    },
+    {
+      "move_number": 8,
+      "player": "red",
+      "piece_number": 0,
+      "start_position": {
+        "col": 0,
+        "row": 10
+      },
+      "end_position": {
+        "col": 13,
+        "row": 11
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-15T23:34:34.099197",
+      "paths": [
+        [
+          -114514,
+          7,
+          1
+        ],
+        [
+          -114514,
+          4,
+          8,
+          6
+        ],
+        [
+          -1,
+          7,
+          1
+        ]
+      ],
+      "formula": [
+        "7+1",
+        "4×(8-6)",
+        "7+1"
+      ]
+    },
+    {
+      "move_number": 9,
+      "player": "blue",
+      "piece_number": 7,
+      "start_position": {
+        "col": 12,
+        "row": 12
+      },
+      "end_position": {
+        "col": 10,
+        "row": 2
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-12-15T23:35:41.184901",
+      "paths": [
+        [
+          -114514,
+          1
+        ],
+        [
+          -1,
+          8,
+          0,
+          4,
+          3
+        ]
+      ],
+      "formula": [
+        "1",
+        "8-0-4-3"
+      ]
+    }
+  ]
+}

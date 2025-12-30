@@ -1,0 +1,118 @@
+{
+  "game_info": {
+    "start_time": "2025-09-01T10:44:54.765835",
+    "end_time": "2025-09-01T10:45:29.802713",
+    "total_moves": 5,
+    "winner": null
+  },
+  "moves": [
+    {
+      "move_number": 1,
+      "player": "blue",
+      "piece_number": 1,
+      "start_position": {
+        "col": 11,
+        "row": 13
+      },
+      "end_position": {
+        "col": 10,
+        "row": 12
+      },
+      "move_type": "normal",
+      "timestamp": "2025-09-01T10:44:56.028032",
+      "paths": null
+    },
+    {
+      "move_number": 2,
+      "player": "red",
+      "piece_number": 4,
+      "start_position": {
+        "col": 3,
+        "row": 13
+      },
+      "end_position": {
+        "col": 4,
+        "row": 12
+      },
+      "move_type": "normal",
+      "timestamp": "2025-09-01T10:44:57.348150",
+      "paths": null
+    },
+    {
+      "move_number": 3,
+      "player": "blue",
+      "piece_number": 9,
+      "start_position": {
+        "col": 13,
+        "row": 9
+      },
+      "end_position": {
+        "col": 9,
+        "row": 13
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-09-01T10:45:06.396086",
+      "paths": [
+        6,
+        3,
+        1
+      ],
+      "formula": [
+        "6+3×1"
+      ]
+    },
+    {
+      "move_number": 4,
+      "player": "red",
+      "piece_number": 0,
+      "start_position": {
+        "col": 0,
+        "row": 10
+      },
+      "end_position": {
+        "col": 4,
+        "row": 6
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-09-01T10:45:15.405711",
+      "paths": [
+        8,
+        7,
+        1
+      ],
+      "formula": [
+        "8-7-1"
+      ]
+    },
+    {
+      "move_number": 5,
+      "player": "blue",
+      "piece_number": 4,
+      "start_position": {
+        "col": 11,
+        "row": 7
+      },
+      "end_position": {
+        "col": 9,
+        "row": 11
+      },
+      "move_type": "calculation",
+      "timestamp": "2025-09-01T10:45:26.004797",
+      "paths": [
+        [
+          -114514,
+          3,
+          2
+        ],
+        [
+          -1,
+          1
+        ]
+      ],
+      "formula": [
+        "3-2",
+        "1"
+      ]
+    }
+  ]
+}

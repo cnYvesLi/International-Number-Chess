@@ -1,0 +1,432 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{amsmath}
+
+\geometry{margin=2.5cm}
+
+\title{Criteria B: Solution Design}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Planning}
+
+\subsection{Project Overview}
+
+This project aims to develop a complete International Number Chess game system, providing players with multiple game modes and rich functional experiences. The project is developed using Python and the Pygame graphics library, implementing complete game logic, user interface, data storage, and network gameplay functionality.
+
+\subsection{Technology Selection and Rationale}
+
+\subsubsection{Programming Language: Python}
+
+The main reasons for choosing Python as the development language:
+
+\begin{itemize}
+    \item \textbf{Concise and Readable}: Python syntax is clear, facilitating rapid development and later maintenance
+    \item \textbf{Rich Library Support}: Has mature game development libraries such as Pygame and json
+    \item \textbf{Cross-platform Compatibility}: Can run on Windows, macOS, Linux and other operating systems
+    \item \textbf{Rapid Prototyping}: Suitable for rapid iteration and testing of game logic
+\end{itemize}
+
+\subsubsection{Graphics Library: Pygame}
+
+The main reasons for choosing Pygame:
+
+\begin{itemize}
+    \item \textbf{Lightweight}: Compared to large engines like Unity, Pygame is more suitable for 2D board games
+    \item \textbf{Event Handling}: Provides comprehensive mouse and keyboard event handling mechanisms
+    \item \textbf{Graphics Rendering}: Supports sprite drawing, animation, and UI element rendering
+    \item \textbf{Community Support}: Has rich documentation and community resources
+\end{itemize}
+
+\subsubsection{Data Storage: JSON Format}
+
+Reasons for choosing JSON format to store game data:
+
+\begin{itemize}
+    \item \textbf{Readability}: Human-readable text format, convenient for debugging and manual editing
+    \item \textbf{Lightweight}: Compared to databases, JSON files are more suitable for storing game records and configurations
+    \item \textbf{Native Python Support}: No additional dependencies required, can be processed using standard library
+    \item \textbf{Structured Data}: Suitable for storing structured information such as game records and level configurations
+\end{itemize}
+
+\subsection{Project Architecture Design}
+
+\subsubsection{Modular Design}
+
+The project adopts a modular architecture, dividing functionality into the following modules:
+
+\begin{enumerate}
+    \item \textbf{Main Program Module (test.py)}: Responsible for game main loop, state management, and user interaction
+    \item \textbf{Game Logic Module (services/game.py)}: Handles game recording, data saving and loading
+    \item \textbf{Practice Module (services/practice.py)}: Implements level system, progress management, and victory condition checking
+    \item \textbf{Custom Setup Module (services/custom\_setup.py)}: Handles saving and loading of custom game setups
+    \item \textbf{Network Play Module (services/netplay.py)}: Implements network communication and online gameplay functionality
+\end{enumerate}
+
+\subsubsection{Data Flow Design}
+
+\begin{itemize}
+    \item \textbf{Game State}: Uses global variables and state machine to manage game states (MENU, GAME, REPLAY, etc.)
+    \item \textbf{Data Persistence}: Saves game records, practice progress, and custom setups through JSON files
+    \item \textbf{Configuration Management}: Uses levels\_config.json to centrally manage level configuration information
+\end{itemize}
+
+\subsection{Core Algorithm Design}
+
+\subsubsection{Recursive Depth-First Search for Path Finding}
+
+\textbf{Purpose}: Find all valid paths for continuous span moves, where each segment must calculate to the same value.
+
+\textbf{Algorithm Description}:
+The \texttt{get\_paths()} function implements a recursive depth-first search (DFS) algorithm to explore all possible paths from a starting position to a target position. The algorithm:
+
+\begin{enumerate}
+    \item \textbf{Base Case}: If the current position equals the target position, validate that all path segments calculate to the same value, then return the path.
+    \item \textbf{Recursive Case}: 
+    \begin{itemize}
+        \item Get all potential jump positions from the current position
+        \item For each potential next position:
+        \begin{itemize}
+            \item Check if the position has not been visited (avoid cycles)
+            \item Check if the direction is valid (not opposite to previous direction)
+            \item Add the current position to the visited set (using a list as a stack)
+            \item Recursively search from the next position
+            \item Remove the current position from the visited set (backtracking)
+        \end{itemize}
+    \end{itemize}
+    \item \textbf{Path Validation}: During the search, each path segment's calculation result is tracked. Only paths where all segments calculate to the same value are returned.
+\end{enumerate}
+
+\textbf{Time Complexity}: O(b\textsuperscript{d}), where b is the branching factor and d is the maximum depth. In practice, pruning reduces the search space significantly.
+
+\textbf{Space Complexity}: O(d) for the recursion stack, plus O(d) for the visited positions list.
+
+\subsubsection{Stack-Based State Management for Try Mode}
+
+\textbf{Purpose}: Implement undo/redo functionality for the try mode feature.
+
+\textbf{Algorithm Description}:
+The try mode uses a stack data structure (\texttt{try\_move\_stack}) to maintain a history of moves:
+
+\begin{itemize}
+    \item \textbf{Stack Operations}:
+    \begin{itemize}
+        \item \textbf{Push}: When a move is made in try mode, it is pushed onto the stack
+        \item \textbf{Pop}: When undoing, moves are popped from the stack
+        \item \textbf{Index-based Access}: An index pointer (\texttt{try\_current\_index}) allows navigation through the stack without modifying it
+    \end{itemize}
+    \item \textbf{State Backup and Restore}:
+    \begin{itemize}
+        \item Before entering try mode, the current board state is backed up (\texttt{try\_original\_blue}, \texttt{try\_original\_red})
+        \item Each move in try mode is recorded with piece information and positions
+        \item Undo operations restore the board state by replaying moves from the backup
+    \end{itemize}
+\end{itemize}
+
+\textbf{Data Structure}: The stack is implemented as a Python list, where each element contains:
+\begin{lstlisting}[language=Python, basicstyle=\small]
+{
+    "piece": (color, number),
+    "from": (col, row),
+    "to": (col, row)
+}
+\end{lstlisting}
+
+\subsubsection{Backtracking Algorithm for Path Validation}
+
+\textbf{Purpose}: Validate that all segments in a continuous span path calculate to the same value.
+
+\textbf{Algorithm Description}:
+The backtracking mechanism is integrated into the DFS path-finding algorithm:
+
+\begin{enumerate}
+    \item When a path segment is explored, its calculation result is stored
+    \item Before adding a path to results, all segment results are compared
+    \item If any segment has a different result, the path is discarded (pruned)
+    \item The algorithm backtracks by removing positions from the visited set, allowing alternative paths to be explored
+\end{enumerate}
+
+\textbf{Optimization}: Early termination occurs when a segment's result doesn't match previous segments, avoiding unnecessary exploration of invalid paths.
+
+\subsubsection{Interpolation Algorithm for Animation}
+
+\textbf{Purpose}: Create smooth animations for piece movement, especially for complex continuous span paths.
+
+\textbf{Algorithm Description}:
+\begin{itemize}
+    \item \textbf{Path Decomposition}: Complex paths are decomposed into intermediate points
+    \item \textbf{Linear Interpolation}: Between each pair of points, linear interpolation calculates intermediate positions:
+    \begin{equation}
+        position(t) = start + t \times (end - start), \quad t \in [0, 1]
+    \end{equation}
+    \item \textbf{Frame-based Animation}: Animation is updated each frame based on elapsed time and playback speed
+    \item \textbf{Speed Control}: Playback speed multiplier adjusts the interpolation rate
+\end{itemize}
+
+\textbf{Implementation}: The algorithm uses time-based interpolation rather than frame-based, ensuring consistent animation speed regardless of frame rate.
+
+\subsection{Development Timeline}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|l|p{8cm}|}
+\hline
+\textbf{Phase} & \textbf{Time} & \textbf{Main Tasks} \\
+\hline
+Requirements Analysis & Weeks 1-2 & Analyze game rules, determine functional requirements, design data structures \\
+\hline
+Core Functionality Development & Weeks 3-5 & Implement board drawing, piece movement, basic game logic \\
+\hline
+Game Mode Implementation & Weeks 6-8 & Develop play mode, replay mode, practice mode \\
+\hline
+Advanced Features & Weeks 9-10 & Implement continuous span, calculation board, custom setup \\
+\hline
+Level System & Weeks 11-12 & Design and implement 5 practice levels, progress management system \\
+\hline
+Network Features & Weeks 13-14 & Implement network gameplay, TCP communication protocol \\
+\hline
+Testing and Optimization & Weeks 15-16 & Functional testing, performance optimization, user experience improvements \\
+\hline
+Documentation & Week 17 & Write user documentation, code comments, IA documentation \\
+\hline
+\end{tabular}
+\caption{Project Development Timeline}
+\end{table}
+
+\subsection{Data Structure Design}
+
+\subsubsection{Game Record Structure}
+
+Game records use JSON format and contain the following fields:
+
+\begin{lstlisting}[language=Python, basicstyle=\small]
+{
+    "game_info": {
+        "start_time": "ISO format timestamp",
+        "total_moves": total_moves
+    },
+    "moves": [
+        {
+            "move_number": move_number,
+            "player": "blue/red",
+            "piece_number": piece_number,
+            "start_position": {"col": x, "row": y},
+            "end_position": {"col": x, "row": y},
+            "move_type": "move/jump/span",
+            "formula": "formula string",
+            "timestamp": "ISO format timestamp",
+            "paths": [list of path points]
+        }
+    ]
+}
+\end{lstlisting}
+
+\subsubsection{Level Configuration Structure}
+
+Level configurations are stored in levels\_config.json, and each level contains:
+
+\begin{itemize}
+    \item Level ID, name, title, description
+    \item Target piece information
+    \item Victory condition type and parameters
+    \item Associated game setup file
+\end{itemize}
+
+\subsubsection{Practice Progress Structure}
+
+Practice progress records contain:
+
+\begin{itemize}
+    \item Player progress: Completed levels, current level, last game time
+    \item Level records: Completion status, attempt count, best moves, completion time for each level
+\end{itemize}
+
+\section{Record of Tasks}
+
+\subsection{Task Record Table}
+
+\begin{longtable}{|p{1.5cm}|p{2.5cm}|p{5cm}|p{3cm}|p{2cm}|}
+\hline
+\textbf{Task ID} & \textbf{Task Description} & \textbf{Implementation Method} & \textbf{Challenges Encountered} & \textbf{Status} \\
+\hline
+\endfirsthead
+
+\hline
+\textbf{Task ID} & \textbf{Task Description} & \textbf{Implementation Method} & \textbf{Challenges Encountered} & \textbf{Status} \\
+\hline
+\endhead
+
+\hline
+\endfoot
+
+\hline
+\endlastfoot
+
+T1 & Board Drawing and Basic Interface & Use Pygame to draw 19×19 hexagonal grid, implement coordinate conversion functions & Complex hexagonal coordinate system calculations & Completed \\
+\hline
+T2 & Piece Display and Selection & Implement piece sprite drawing, mouse click detection, selection highlight effect & Coordinate conversion precision issues & Completed \\
+\hline
+T3 & Basic Movement Logic & Implement single-step movement, adjacent cell detection, movement legality validation & Hexagonal adjacency relationship judgment algorithm & Completed \\
+\hline
+T4 & Jump Movement & Implement jump over adjacent pieces logic, path calculation & Straight-line detection for jump paths & Completed \\
+\hline
+T5 & Single Span Calculation & Implement single span over multiple pieces, formula validation & Collection and calculation of all pieces on span path & Completed \\
+\hline
+T6 & Continuous Span & Implement multi-segment continuous span using recursive DFS with backtracking, each segment must calculate to same value & Recursive path-finding algorithm, backtracking for result validation & Completed \\
+\hline
+T7 & Calculation Board Function & Implement formula input interface, operator buttons, result validation & Formula parsing and safe calculation (avoiding code injection) & Completed \\
+\hline
+T8 & Game Recording System & Implement recording of each move, save in JSON format & Data structure design, timestamp handling & Completed \\
+\hline
+T9 & Replay Mode & Implement loading and replaying of game records using interpolation algorithm, playback controls (play/pause/speed adjustment) & Replay state synchronization, linear interpolation for animation smoothness & Completed \\
+\hline
+T10 & Custom Setup & Implement drag-and-drop setup interface, save and load game setups & Drag-and-drop interaction design, file management & Completed \\
+\hline
+T11 & Level System Design & Design 5 tutorial levels, define victory condition types & Level difficulty gradient design, educational considerations & Completed \\
+\hline
+T12 & Level Implementation & Implement level loading, victory condition checking, progress saving & Unified interface for handling multiple victory conditions & Completed \\
+\hline
+T13 & Practice Progress Management & Implement progress recording, best score tracking, reset functionality & Data persistence, progress synchronization & Completed \\
+\hline
+T14 & Try Mode Function & Implement try mode using stack data structure, support multiple try moves and undo & Stack-based state backup and restore mechanism & Completed \\
+\hline
+T15 & Network Gameplay Function & Implement TCP client/server, game state synchronization & Network latency handling, state synchronization protocol design & Completed \\
+\hline
+T16 & Menu System & Implement main menu, mode selection, file selection interface & UI layout design, interaction feedback & Completed \\
+\hline
+T17 & Hint System & Implement level hint box, draggable, supports collapse & UI component design, state management & Completed \\
+\hline
+T18 & Demo Mode & Implement automatic demo function using interpolation algorithm, virtual mouse animation & Linear interpolation for smooth animation, step synchronization & Completed \\
+\hline
+T19 & Code Refactoring & Modularize functionality, separate into services directory & Inter-module dependency management, interface design & Completed \\
+\hline
+T20 & Performance Optimization & Optimize rendering performance, reduce unnecessary redraws & Rendering optimization, event handling optimization & Completed \\
+\hline
+\end{longtable}
+
+\subsection{Key Design Decisions}
+
+\subsubsection{Decision 1: State Machine Design}
+
+\textbf{Problem}: How to manage multiple game states (menu, game, replay, practice, etc.)?
+
+\textbf{Solution}: Use global state variable `state`, manage state transitions through state machine pattern. Each state has corresponding handler functions, ensuring clear and controllable state transitions.
+
+\textbf{Rationale}: State machine pattern is suitable for game development, can clearly manage complex state transition logic, facilitating debugging and maintenance.
+
+\subsubsection{Decision 2: Modular Architecture}
+
+\textbf{Problem}: How to organize 6000+ lines of code to make it maintainable?
+
+\textbf{Solution}: Modularize functionality, separate into services directory:
+\begin{itemize}
+    \item game.py: Game recording related functionality
+    \item practice.py: Practice mode related functionality
+    \item custom\_setup.py: Custom setup functionality
+    \item netplay.py: Network gameplay functionality
+\end{itemize}
+
+\textbf{Rationale}: Modular design improves code maintainability and extensibility, each module has a single responsibility, facilitating testing and modification.
+
+\subsubsection{Decision 3: JSON Data Storage}
+
+\textbf{Problem}: How to store game records, level configurations and other data?
+
+\textbf{Solution}: Use JSON format to store all data files, including game records, level configurations, practice progress, and custom setups.
+
+\textbf{Rationale}:
+\begin{itemize}
+    \item JSON format is human-readable, convenient for debugging
+    \item Native Python support, no additional dependencies required
+    \item Suitable for storing structured but not overly complex data
+    \item Moderate file size, fast loading speed
+\end{itemize}
+
+\subsubsection{Decision 4: Hexagonal Coordinate System}
+
+\textbf{Problem}: How to represent and calculate coordinates for hexagonal grid?
+
+\textbf{Solution}: Use axial coordinate system, implement coordinate-to-pixel conversion functions.
+
+\textbf{Rationale}: Axial coordinate system is the standard representation method for hexagonal grids, operations such as calculating adjacency relationships and path finding are relatively simple.
+
+\subsubsection{Decision 5: Network Protocol Design}
+
+\textbf{Problem}: How to design network gameplay protocol to ensure state synchronization?
+
+\textbf{Solution}: Use TCP protocol, design JSON-based message format, clients send move information, server broadcasts to all clients.
+
+\textbf{Rationale}:
+\begin{itemize}
+    \item TCP guarantees reliable data transmission
+    \item JSON format is convenient for parsing and debugging
+    \item Simple request-response pattern is easy to implement
+\end{itemize}
+
+\subsection{Challenges Encountered and Solutions}
+
+\subsubsection{Challenge 1: Continuous Span Path Calculation}
+
+\textbf{Problem}: Continuous span requires finding all possible paths, each segment's calculation result must be equal, algorithm complexity is high.
+
+\textbf{Solution}: Implemented a recursive depth-first search (DFS) algorithm with backtracking. The algorithm:
+\begin{itemize}
+    \item Uses a stack-based visited set to track explored positions
+    \item Calculates each segment's result in real-time during the search
+    \item Prunes branches that don't meet the equal-value condition
+    \item Employs backtracking to explore alternative paths when a branch is invalid
+\end{itemize}
+
+\textbf{Result}: Successfully implemented continuous span functionality, able to find all paths that meet the conditions. The backtracking mechanism ensures efficient exploration of the search space.
+
+\subsubsection{Challenge 2: Replay Animation Smoothness}
+
+\textbf{Problem}: In replay mode, piece movement animations need to be smooth while handling complex paths of continuous spans.
+
+\textbf{Solution}: Decompose paths into multiple intermediate points, use interpolation algorithms to achieve smooth animations, support playback speed adjustment.
+
+\textbf{Result}: Replay functionality runs smoothly with good user experience.
+
+\subsubsection{Challenge 3: Network Latency Handling}
+
+\textbf{Problem}: In network gameplay, latency may cause state desynchronization.
+
+\textbf{Solution}: Adopt server-authoritative mode, all moves must be verified and broadcast by the server, clients only update local state after receiving confirmation.
+
+\textbf{Result}: Network gameplay functionality is stable with reliable state synchronization.
+
+\subsection{Testing Strategy}
+
+\subsubsection{Functional Testing}
+
+\begin{itemize}
+    \item \textbf{Movement Rule Testing}: Verify legality of single-step movement, jump movement, continuous span
+    \item \textbf{Calculation Validation Testing}: Test calculation board's formula parsing and result validation
+    \item \textbf{Level Testing}: Test whether each level's victory conditions are correctly triggered
+    \item \textbf{Data Persistence Testing}: Verify saving and loading of game records and progress
+\end{itemize}
+
+\subsubsection{User Experience Testing}
+
+\begin{itemize}
+    \item \textbf{Interface Responsiveness}: Test response speed of mouse clicks and keyboard input
+    \item \textbf{Animation Smoothness}: Test smoothness of piece movement and replay animations
+    \item \textbf{Error Handling}: Test handling of exceptional input, file errors and other situations
+\end{itemize}
+
+\subsection{Project Summary}
+
+This project successfully implemented a fully functional International Number Chess game system, including multiple game modes, a complete level system, network gameplay functionality, and more. Through modular design and reasonable architectural choices, the code structure is clear, easy to maintain and extend. Challenges encountered during project development were effectively resolved through algorithm optimization and design improvements, ultimately delivering a stable and feature-rich game system.
+
+\end{document}

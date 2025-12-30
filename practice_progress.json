@@ -1,36 +1,53 @@
 {
   "player_progress": {
     "completed_levels": [
-      1
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
     ],
-    "current_level": 2,
-    "total_levels": 4,
-    "last_played": "2025-08-27 22:09:52"
+    "current_level": 6,
+    "total_levels": 6,
+    "last_played": "2025-12-30 15:09:06"
   },
   "level_records": {
     "1": {
       "completed": true,
-      "attempts": 3,
+      "attempts": 1,
       "best_moves": 1,
-      "completion_time": 1.1331908702850342
+      "completion_time": 1.795630931854248
     },
     "2": {
-      "completed": false,
-      "attempts": 0,
-      "best_moves": null,
-      "completion_time": null
+      "completed": true,
+      "attempts": 1,
+      "best_moves": 1,
+      "completion_time": 1.2961490154266357
     },
     "3": {
-      "completed": false,
-      "attempts": 0,
-      "best_moves": null,
-      "completion_time": null
+      "completed": true,
+      "attempts": 1,
+      "best_moves": 1,
+      "completion_time": 9.964996814727783
     },
     "4": {
-      "completed": false,
-      "attempts": 0,
-      "best_moves": null,
-      "completion_time": null
+      "completed": true,
+      "attempts": 2,
+      "best_moves": 1,
+      "completion_time": 12.697923183441162
+    },
+    "5": {
+      "completed": true,
+      "attempts": 1,
+      "best_moves": 1,
+      "completion_time": 4.348520040512085
+    },
+    "6": {
+      "completed": true,
+      "attempts": 7,
+      "best_moves": 1,
+      "completion_time": 339.55601501464844
     }
   }
 }
